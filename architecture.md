@@ -93,6 +93,63 @@ order for a contract change: plugin first, tag, then bump the bot.
 Naming: **Talooner** is the ecosystem *and* the bot. The bot is plain `talooner`;
 everything else in the ecosystem is `talooner-*`.
 
+### Bot repo layout
+
+```
+talooner/
+  cmd/
+    talooner-bot/         # the GitHub App service
+    talooner/             # the CLI / gh extension
+  internal/
+    githubapp/            # JWT → installation token, REST + GraphQL client
+    webhook/              # receive, HMAC verify, enqueue
+    command/              # @talooner /review /stop /why /plan + write-access gate
+    facts/                # extractors: diff, checks, CODEOWNERS, modules, teams
+    action/               # executor interface + one file per Talon verb
+      executor.go         #   interface + registry keyed by verb
+      github.go           #   real writes
+      printer.go          #   dry run — this is `rules plan`
+      approve.go
+      block.go
+      comment.go
+      assign.go
+      require.go
+      notify.go
+      emit.go
+    cluster/              # talooner-plugin client: whoami, evaluate_pr, ...
+    config/
+```
+
+Three things this layout is deliberately encoding:
+
+**`command/` and `action/` are not the same concept.** A *command* is a human
+typing `@talooner /review` in a PR comment — it arrives from a webhook, is gated
+on write access, and decides *whether to evaluate*. An *action* is a Talon verb
+the plugin returned — it arrives as data from the engine and decides *what to do
+to GitHub*. Different inputs, different auth, different tests. Collapsing them
+into one package makes the write-access gate ambiguous, which is a security
+control, not a stylistic detail.
+
+**Action file names match Talon verbs exactly.** The plugin returns
+`{"verb": "approve", ...}` as a string; the bot dispatches through a registry
+keyed by that string. If the file is `approve.go` and the verb is `approve`,
+adding a verb to the DSL and adding a file stay in lockstep, and an unknown verb
+is a single lookup failure with a clear error rather than a silent no-op.
+
+Note there is no `reject.go` — `reject` is not in the vocabulary. The verbs are
+`approve`, `block`, `comment`, `assign`, `require`, `notify`, `emit`
+(`actions.md`). "Request changes" is how `block` renders on GitHub, not a
+separate verb. Keeping the file set and the grammar identical is what stops the
+two drifting.
+
+**No `helpers/` or `utils/`.** Packages are named for what they do. A shared
+helper package accumulates unrelated code until it depends on everything and
+nothing can import it without a cycle. If something is genuinely shared, it
+belongs in the package that owns the concept.
+
+`internal/` rather than `src/` — Go convention, matches every other repo in the
+workspace, and `internal/` is enforced by the compiler rather than by agreement.
+
 ### Dependency chain
 
 `talooner-plugin` links `talon-language`, which carries
