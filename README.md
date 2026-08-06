@@ -63,12 +63,16 @@ claim no LLM-based reviewer can make.
 |---|---|
 | `diagrams.md` | **Start here** — C4 levels 1–3 plus UML sequence/state: context, components, flows, credentials, fact sources |
 | `architecture.md` | Components, bot/plugin split, request flow, fork safety, determinism |
-| `plugin.md` | **Server side** — `talooner-plugin` brief: protocol, actions, fact scoping, `llm_review`, cluster deployment |
 | `facts.md` | Fact vocabulary, extraction, three-valued semantics |
 | `actions.md` | Action catalog, GitHub semantics, conflict resolution, App permissions |
 | `auth.md` | Credentials, onboarding CLI, untrusted input, audit |
 | `roadmap.md` | Phases 0–4, and what this drags into the other repos |
 | `OPEN-QUESTIONS.md` | What's still undecided |
+
+The server side is documented in its own repo:
+[`talooner-plugin`](https://github.com/opentalon/talooner-plugin) — protocol,
+engine internals, fact scoping, `llm_review`, cluster deployment. Start with its
+`README.md`.
 
 ## Decisions so far
 
@@ -113,13 +117,16 @@ Details in `auth.md`.
 | [`opentalon`](https://github.com/opentalon/opentalon) | Core orchestration platform and plugin host |
 | [`talon-language`](https://github.com/opentalon/talon-language) | The Talon DSL: grammar, parser, inference engine, `.talon.test` |
 | [`talon-db`](https://github.com/opentalon/talon-db) | Embedded fact store backing Talon |
-| `talooner-plugin` | Server side — engine, fact store, proto. Not yet created. |
+| [`talooner-plugin`](https://github.com/opentalon/talooner-plugin) | Server side — engine, fact store, proto |
 
 ## Contributing
 
 Design phase, so the highest-value contribution right now is disagreement.
-`OPEN-QUESTIONS.md` lists what's undecided; §A items are answerable by reading
-`talon-language` and each one blocks implementation.
+`OPEN-QUESTIONS.md` lists what's undecided. The phase-0 substrate questions —
+answerable by reading `talon-language`, and each one blocks implementation — live
+in
+[`talooner-plugin/OPEN-QUESTIONS.md`](https://github.com/opentalon/talooner-plugin/blob/main/OPEN-QUESTIONS.md)
+§A.
 
 ## License
 

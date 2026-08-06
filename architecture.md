@@ -90,6 +90,10 @@ owns the contract. The bot imports the generated Go package as a normal tagged
 dependency — the same relationship `mcp-plugin` has with `opentalon`. Landing
 order for a contract change: plugin first, tag, then bump the bot.
 
+Everything cluster-side is documented in that repo and not duplicated here. The
+docs in `talooner/` describe the bot, the GitHub surface, and the contract from
+the caller's side.
+
 Naming: **Talooner** is the ecosystem *and* the bot. The bot is plain `talooner`;
 everything else in the ecosystem is `talooner-*`.
 
@@ -152,22 +156,16 @@ workspace, and `internal/` is enforced by the compiler rather than by agreement.
 
 ### Dependency chain
 
-`talooner-plugin` links `talon-language`, which carries
-`replace github.com/opentalon/talon-db => ../talon-db`. A `replace` is not
-transitive through a dependency — the **consuming** module must restate it. So
-`talooner-plugin/go.mod` needs both:
-
-```
-replace github.com/opentalon/talon-db => ../talon-db
-```
-
-and a sibling `talon-db/` checkout, plus the same CI clone step
-`talon-language/.github/workflows/ci.yml` uses. This is the documented workspace
-convention (`CLAUDE.md`, "Cross-repo wiring"), not a workaround.
-
 The bot links neither `talon-language` nor `talon-db` — it only speaks the
-plugin's gRPC contract. That mirrors `opentalon-agents`, which deliberately
-links no `talon-language` code.
+plugin's contract, consuming the generated Go package as a normal tagged
+dependency. That mirrors `opentalon-agents`, which deliberately links no
+`talon-language` code, and it's why the bot builds without a sibling `talon-db/`
+checkout.
+
+The plugin does link both, and therefore inherits the workspace's `replace`
+convention. See
+[`talooner-plugin/deployment.md`](https://github.com/opentalon/talooner-plugin/blob/main/deployment.md),
+"Dependency chain" — read it before the first build over there.
 
 ## Invocation — explicit in v1
 
@@ -235,7 +233,8 @@ worker picks {installation_id, repo, pr}
   2. load ruleset  ← BASE branch (see "Fork safety")
   3. extract facts (see facts.md)
   4. plugin action "evaluate_pr" {repo, pr, head_sha, facts JSON, ruleset, mode}
-     (an OpenTalon plugin action, not a bespoke rpc — see plugin.md)
+     (an OpenTalon plugin action, not a bespoke rpc —
+      see talooner-plugin/protocol.md)
        └─ plugin: assert facts into talon-db, run engine,
                   resolve conflicts (defeasible), issue llm_review as needed,
                   return actions + explanation

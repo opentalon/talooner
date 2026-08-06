@@ -88,33 +88,21 @@ So: a PR that was approved and then grows past 500 lines has its approval
 dismissed on the next run. This is why the bot re-derives all facts and
 re-evaluates from scratch on every event rather than applying deltas.
 
-## Conflict resolution — defeasible
+## Conflict resolution happens plugin-side
 
-`approve` and `block` can both fire. Resolved by Talon's defeasible machinery
-(`talon-language/docs/defeasible.md`), not by an ad-hoc "block wins" in
-Talooner:
+`approve` and `block` can both fire. They are resolved by Talon's defeasible
+machinery inside the plugin, not by an ad-hoc "block wins" in the bot —
+`strict` > `overrides` > priority, plus a `strict` base ruleset Talooner always
+loads. Full rules in
+[`talooner-plugin/engine.md`](https://github.com/opentalon/talooner-plugin/blob/main/engine.md),
+"Conflict resolution".
 
-- Safety rules are declared `strict` — they always fire, never defeated.
-- Priority ordering `CRITICAL > HIGH > MEDIUM > LOW`, default `MEDIUM`.
-- `overrides "Rule name"` for explicit defeat, walked transitively.
-- An unresolved tie fires both and warns.
-
-Talooner ships a small **base ruleset** it always loads at low precedence,
-declaring the non-negotiables as `strict`, so a tenant ruleset can't
-accidentally approve something structurally unreviewable:
-
-```talon
-strict rule "Never approve a PR with unresolved conflicts" { ... }
-strict rule "Never approve while required checks are still running" { ... }
-```
-
-An unresolved tie between a tenant `approve` and a tenant `block` resolves
-conservatively: both fire, and since `block` produces a `failure` check run
-while `approve` produces `success` on the same check, the check-run writer
-applies block-wins as a **last-resort** tiebreak and emits a ruleset warning
-telling the maintainer to disambiguate with `overrides` or `priority`. The
-warning is the real product; the tiebreak is just so the check run has one
-value.
+What lands on the bot: an unresolved tie returns **both** actions plus a warning.
+Since `block` produces a `failure` check run and `approve` a `success` on the
+same check, the check-run writer applies block-wins as a **last-resort** tiebreak
+and surfaces the plugin's warning as a comment telling the maintainer to
+disambiguate with `overrides` or `priority`. The warning is the real product; the
+tiebreak is just so the check run has one value.
 
 ## Not implemented: `deploy_preview`, `screenshot`, `scan_dependencies`
 

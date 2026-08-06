@@ -4,37 +4,21 @@ Resolved decisions live in `README.md`. What remains.
 
 ---
 
-## A. Blocking phase 0 — verify against `talon-language`, don't assume
+## A. Blocking phase 0 — substrate verification
 
-Answerable by reading code, not by discussion. Each one silently produces wrong
-reviews if assumed.
+Answerable by reading `talon-language` / `talon-db`, not by discussion. Each one
+silently produces wrong reviews if assumed. They all block the plugin rather than
+the bot, so they live in
+[`talooner-plugin/OPEN-QUESTIONS.md`](https://github.com/opentalon/talooner-plugin/blob/main/OPEN-QUESTIONS.md)
+§A — three-valued evaluation, list operands, facts as action arguments,
+interpolation position, cross-ruleset defeasible resolution, external reactive
+wake, `talon-db` at this shape, payload size.
 
-**A1. Three-valued evaluation.** Does a condition on an unset fact evaluate to
-unknown (rule doesn't fire), and is `not <unknown>` unknown rather than true?
-Two-valued logic means a PR whose fact extraction failed gets auto-approved by
-`not is "critical_path"`. Hard blocker. See `facts.md`, "Unset is not false".
-
-**A2. List operands.** Do `contains` / `matches` (`grammar.ebnf:515`) quantify
-existentially over a list like `pr.changed_files`, or are they string-only? Every
-`pr.touches_*` predicate depends on it. If string-only: fix it generally in
-`internal/executor`, or have Talooner assert a joined string as a fallback?
-
-**A3. Facts as action arguments.** Can an action take a fact reference rather
-than a literal — `do assign "pr" "user.owner"`? The whole `user.*` namespace is
-pointless if not.
-
-**A4. Interpolation position.** Is `{ident.field}` (`grammar.ebnf:601`) available
-in action arguments, or only in labels?
-
-**A5. Cross-ruleset defeasible.** Does `overrides` / priority resolution work
-across two rulesets loaded together (Talooner's `strict` base + the tenant's)?
-
-**A6. External wake.** Can an out-of-band fact assertion wake the reactive engine
-mid-PR? This is the *only* path for preview / screenshot / dependency-scan rules
-now that dispatch is off the table — so it moved from nice-to-have to required.
-
-**A7. `talon-db` at this shape.** Thousands of small, short-lived, concurrent
-fact scopes — one per open PR — plus subscription state. Fits, or needs work?
+The one with a bot-visible consequence: if the evaluator is two-valued, a PR
+whose fact extraction partially failed gets auto-approved by
+`not is "critical_path"`. That changes what "leave the fact unset" means for
+every extractor in `internal/facts`. Hard blocker. See `facts.md`, "Unset is not
+false".
 
 ---
 
@@ -43,27 +27,23 @@ fact scopes — one per open PR — plus subscription state. Fits, or needs work
 **B1. Licensing.** Recommendation and reasoning in the section below. Needs a
 yes/no from you.
 
-**B2. Where does subscription state live?** It's cluster-side (the bot is
-stateless), but is it a `talon-db` fact like everything else, or plugin-local
-metadata outside the fact store? Fact is more consistent and makes
-`when "pr.subscribed" == true` expressible; metadata is cleaner separation.
-Leaning fact.
-
-**B3. Does `@talooner /review` re-evaluate, or only subscribe?** If a PR is
+**B2. Does `@talooner /review` re-evaluate, or only subscribe?** If a PR is
 already subscribed and someone comments `/review` again — full re-evaluation
 including a fresh `llm_review` at the same sha (costs money, bypasses the fact
 cache), or a no-op that re-renders the existing verdict? Leaning re-render, with
 `/review --force` for the expensive path.
 
-**B4. Bot identity on GitHub.** The App's display name is what appears on every
+**B3. Bot identity on GitHub.** The App's display name is what appears on every
 review. `talooner[bot]` follows convention. Confirm, and confirm the org that
 owns the App listing if you ever publish it to the Marketplace (listing is free
 and doesn't imply a hosted service).
 
-**B5. Retention defaults.** 30 days for facts, 1 year for decisions are
-placeholders. Since the tenant runs their own storage, these could just as well
-be "keep forever, you own the disk". Leaning: configurable, default 90d facts /
-forever for decisions.
+Two questions that used to sit here — where subscription state lives, and
+retention defaults — are cluster-side and moved to
+[`talooner-plugin/OPEN-QUESTIONS.md`](https://github.com/opentalon/talooner-plugin/blob/main/OPEN-QUESTIONS.md)
+§B. B2 above still needs an answer from both sides: whether `--force` exists is a
+command-surface decision here, and a cache-bypass argument on `evaluate_pr`
+there.
 
 ---
 

@@ -155,7 +155,8 @@ name, every file under `.github/talooner/`. Consequences:
   explanation string is rendered as quoted, escaped text in a comment, never
   interpreted.
 - `llm_review` per-PR call cap and per-tenant budget ceiling, enforced
-  cluster-side.
+  cluster-side —
+  [`talooner-plugin/llm-review.md`](https://github.com/opentalon/talooner-plugin/blob/main/llm-review.md).
 
 ## Audit
 

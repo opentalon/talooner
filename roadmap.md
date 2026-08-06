@@ -13,20 +13,17 @@ not a checkbox.
 
 ## Phase 0 — verify the substrate
 
-No Talooner code. Answer whether `talon-language` can express the ruleset in the
-project brief, and fix it where it can't. Every one of these is a prerequisite
-that will silently produce wrong reviews if assumed rather than checked.
+No Talooner code, and **no bot work at all**. Phase 0 is entirely a question
+about `talon-language` and `talon-db`: can they express the ruleset in the
+project brief, and if not, fix them. Every item silently produces wrong reviews
+if assumed rather than checked.
 
-| Question | Where | Why it blocks |
-|---|---|---|
-| Can a rule reference a fact as an action *argument* (`do assign "pr" "user.owner"`), not just as a literal? | `internal/executor` | The entire `user.*` namespace is useless otherwise |
-| Is the evaluator three-valued? Does an unknown fact suppress a rule, and is `not <unknown>` unknown? | `talon-language/internal/executor` | Two-valued logic auto-approves PRs whose fact extraction failed. See `facts.md`, "Unset is not false". Hard blocker. |
-| Do `contains` / `matches` quantify existentially over a list operand? | `internal/executor`, `grammar.ebnf:515` | Every `pr.touches_*` predicate depends on it |
-| Is `{ident.field}` interpolation available in action arguments, not only labels? | `grammar.ebnf:601` | `do comment "pr" "... at {screenshots.gallery_url}"` |
-| Does `talon-db` support many small short-lived fact scopes (one per PR) efficiently? | `talon-db` | Thousands of open PRs across installs |
-| Can the reactive engine be woken by an external fact assertion mid-PR? | `internal/reactive` | Custom facts — the *only* path for preview/screenshot/scan rules |
-| Does defeasible resolution work across two rulesets loaded together (Talooner base + tenant)? | `internal/defeasible` | `actions.md`, "Conflict resolution" |
-| Does the plugin protocol (`opentalon/proto/plugin.proto`) fit a request/response with a large fact payload? | `opentalon/pkg/plugin` | The bot↔plugin seam |
+The full table lives in
+[`talooner-plugin/roadmap.md`](https://github.com/opentalon/talooner-plugin/blob/main/roadmap.md),
+since it's the plugin that depends on every answer. The one the bot has a stake
+in: **three-valued evaluation.** Two-valued logic means a PR whose fact
+extraction failed sails through `not is "critical_path"` and gets auto-approved —
+`facts.md`, "Unset is not false". Hard blocker.
 
 **Exit:** a `.talon` file in `talon-language/examples/` expressing the brief's
 ruleset, with a `.talon.test` that passes, running against synthetic PR facts.
@@ -52,11 +49,10 @@ One repo, one ruleset, mechanical facts, two action types. No LLM.
 - Actions: check run `talooner`, sticky comment
 - Action executor behind an interface (the printer implementation is `rules plan`)
 
-**Plugin** — `github.com/opentalon/talooner-plugin`
-- Loads in an OpenTalon cluster, `talon-db` attached
-- Owns the proto; the bot consumes the generated package as a tagged dep
-- `EvaluatePR(facts, ruleset) → actions + explain`
-- Per-PR fact scoping, subscription state, retention
+**Plugin** — tracked in
+[`talooner-plugin/roadmap.md`](https://github.com/opentalon/talooner-plugin/blob/main/roadmap.md).
+What the bot needs from it in this phase: `evaluate_pr`, `is_subscribed`,
+`set_subscription`, `validate_ruleset`, `whoami`.
 
 **CLI**
 - `cluster login` / `whoami`
@@ -99,20 +95,17 @@ which "battle-tested" stops being an aspiration.
 
 ## Phase 3 — `llm_review`
 
-The only place a model enters, and it enters as a fact.
+The only place a model enters, and it enters as a fact. **Almost entirely
+plugin-side** — the bot never sees an LLM. Details in
+[`talooner-plugin/llm-review.md`](https://github.com/opentalon/talooner-plugin/blob/main/llm-review.md).
 
-- Plugin-side LLM call using cluster-configured tenant credentials
-- Prompt in a `.txt` file, never a Go literal (`opentalon/CLAUDE.md` is explicit)
-- Fixed output enum: `match` | `mismatch` | `unclear` | `too_large` | `error`
-- Result stored as a fact keyed by `(pr, head_sha, doc_url, prompt_version)` —
-  the fact store is the cache, no separate layer
-- Per-PR conversation retained cluster-side; each review a scoped turn
-- Per-PR call cap, per-tenant budget ceiling, quota surfaced via `whoami`
-- Prompt-injection posture: constrained enum output, explanation rendered as
-  escaped quoted text
-- Per-module evaluation cardinality decided and implemented (`facts.md`,
-  "`module.*`")
-- VCR cassettes for tests, per the core's convention
+The bot's share of this phase:
+
+- Surface remaining quota from `whoami` and warn at ruleset-load time when a
+  ruleset uses `llm_review` on a cluster with no configured provider
+- Render `llm_review.explanation` as escaped, quoted text in a comment, never
+  interpreted — it is model output derived from an attacker-controllable diff
+- Send `pr.diff` size-capped, asserting `pr.diff_truncated` past the cap
 
 **Exit:** a PR whose code contradicts its module docs gets blocked with a
 specific, quotable explanation — and re-running at the same sha makes no second

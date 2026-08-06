@@ -14,7 +14,7 @@ Companion docs: `architecture.md` (prose), `facts.md`, `actions.md`, `auth.md`,
 |---|---|---|
 | C4 L1 — Context | §0 | Mermaid `flowchart` |
 | C4 L2 — Container | §1 | Mermaid `flowchart` |
-| C4 L3 — Component | §2a, §2b | Mermaid `flowchart` |
+| C4 L3 — Component | §2a | Mermaid `flowchart` |
 | C4 L4 — Code | — | Skipped. The code is the code. |
 | Behaviour | §3–§6 | UML sequence |
 | Behaviour | §7 | UML state machine |
@@ -35,7 +35,7 @@ Two notation decisions worth knowing before someone "fixes" them:
 |---|---|---|
 | 0 | System context (C4 L1) | Who uses it, what it touches, who pays |
 | 1 | Containers (C4 L2) | What runs where inside the boundary |
-| 2a / 2b | Components (C4 L3) | The bot/plugin seam, and why it's there |
+| 2a | Components (C4 L3) | The bot's internals; the plugin's are in `talooner-plugin/diagrams.md` §2 |
 | 3 | `@talooner /review` flow | The v1 happy path, end to end |
 | 4 | Re-evaluation on push | Reactive rules, and retraction |
 | 5 | `llm_review` | Why there's no cache layer, and where determinism comes from |
@@ -179,30 +179,10 @@ flowchart TB
 
 ### 2b. `talooner-plugin` — knows Talon, knows nothing about GitHub
 
-```mermaid
-flowchart TB
-    IN(["action evaluate_pr<br/>facts JSON + ruleset text"]) --> RPC
-    RPC["gRPC surface<br/>owns the proto"] --> RULES
-    RULES["Ruleset loader<br/>parse · validate · compile"] --> ENGINE
-    BASE["Talooner base ruleset<br/><i>strict</i>, always loaded"] --> ENGINE
-    ENGINE["Talon engine<br/>RETE-ish · reactive"] --> LLMR
-    ENGINE --> DEF
-    LLMR["llm_review<br/>fact-cached by head_sha"] --> DEF
-    DEF["Defeasible resolution<br/>strict &gt; overrides &gt; priority"] --> EXPL
-    EXPL["explain / audit"] --> OUT
-    OUT(["→ actions[] + explain<br/>back to the bot"])
-
-    ENGINE <--> ST[("talon-db<br/>facts · decisions<br/>subscriptions")]
-    LLMR <--> ST
-    EXPL --> ST
-
-    classDef plug fill:#eef7ea,stroke:#4a8f3c,color:#0f2a0c
-    classDef store fill:#ede7f6,stroke:#6a4fa3,color:#221040
-    classDef edge fill:#f4f4f4,stroke:#8a8a8a,color:#333
-    class RPC,RULES,BASE,ENGINE,DEF,LLMR,EXPL plug
-    class ST store
-    class IN,OUT edge
-```
+Lives in the other repo:
+[`talooner-plugin/diagrams.md`](https://github.com/opentalon/talooner-plugin/blob/main/diagrams.md)
+§2. Ruleset loader → engine → `llm_review` → defeasible resolution → `explain`,
+all over `talon-db`.
 
 The seam: the plugin returns an **abstract action list**, the bot translates it
 into API calls. Consequences worth stating to the team —

@@ -3,6 +3,11 @@
 Everything a rule can match on. Facts live in `talon-db`, scoped per pull
 request, asserted by the bot and read by the engine.
 
+This file is the **extraction** side: what the bot produces and where each fact
+comes from. What happens to those facts once they reach the cluster — scoping,
+lifetime, namespace enforcement, retention — is
+[`talooner-plugin/facts.md`](https://github.com/opentalon/talooner-plugin/blob/main/facts.md).
+
 ## Where configuration lives
 
 In the repo being reviewed. Talooner reads it with the installation token it
@@ -303,11 +308,16 @@ Rules:
 Confirm points 1–3 against `talon-language`'s actual evaluator before relying on
 them. If the engine is two-valued, this becomes a prerequisite change in
 `talon-language`, not a Talooner-local concern — and it's the first thing to
-verify in phase 0.
+verify in phase 0 (`talooner-plugin/OPEN-QUESTIONS.md` A1).
+
+This is why the bot leaves a fact **unset** rather than guessing a default —
+`pr.tests_passing` while CI is still running, or on a repo with no matching
+checks. Extraction's job is to be honest about what it doesn't know; the engine's
+job is not to treat that as `false`.
 
 ## Retention
 
-Facts live until the PR closes, then a configurable grace period (default 30
-days) for audit queries, then deletion. Decisions and their `explain` records
-are retained longer (default 1 year) since "why did the bot block this?" is
-asked long after the fact.
+Facts outlive a single webhook and are the plugin's to expire — defaults and the
+open question about them are in
+[`talooner-plugin/facts.md`](https://github.com/opentalon/talooner-plugin/blob/main/facts.md),
+"Scoping and lifetime". The bot keeps nothing across requests.
