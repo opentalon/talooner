@@ -141,12 +141,12 @@ talooner cluster whoami
 # 2. wire up a repo
 talooner init --repo acme/api
 #   → writes .github/workflows/talooner.yml
-#   → writes .github/talooner/rules.talon (starter policy)
+#   → writes .github/talooner/rules.tln (starter policy)
 #   → gh secret set OPENTALON_HOST / OPENTALON_API_KEY   (prompts, or --org)
 
 # 3. author and validate rules — all local, no cluster writes
 talooner rules validate .github/talooner/
-talooner rules test .github/talooner/         # runs .talon.test files
+talooner rules test .github/talooner/         # runs .tln.test files
 talooner rules plan --repo acme/api --pr 42   # dry-run against a live PR
 ```
 
@@ -185,15 +185,15 @@ even though nothing needs it until phase 2.
 
 ### `rules test`
 
-`talon-language` already ships a `.talon.test` framework and a testrunner
+`talon-language` already ships a `.tln.test` framework and a testrunner
 (`talon-language/internal/testrunner`). Talooner reuses it directly: a repo
 unit-tests its review policy in its own CI, with synthetic PR facts, before that
 policy ever gates a real PR.
 
 ```
 .github/talooner/
-  rules.talon
-  rules.talon.test
+  rules.tln
+  rules.tln.test
   config.yaml
   modules.yaml
   teams.yaml
