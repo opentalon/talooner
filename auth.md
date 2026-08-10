@@ -5,11 +5,12 @@
 Talooner is not a service you sign up for, and it never will be. There is no
 hosted tier, no free tier, no managed offering. To use it you need:
 
-1. A VPS (or any host) running an **OpenTalon cluster**
+1. A VPS (or any host) running an **OpenTalon cluster**, reachable from the
+   runner
 2. `talooner-plugin` loaded in that cluster, with `talon-db` available
 3. LLM provider credentials configured **in the cluster**
-4. A GitHub App registered against your org, installed on your repos
-5. The `talooner` bot running, holding the App private key and a cluster API key
+4. `.github/workflows/talooner.yml` in each repo you want reviewed
+5. `OPENTALON_HOST` and `OPENTALON_API_KEY` as repo or org secrets
 
 This is the design, permanently. The cluster holds the LLM credentials, so every
 token a rule spends is billed to whoever ran the rule. Nobody's review load can
@@ -21,49 +22,90 @@ don't run Talooner.
 
 | Credential | Held by | Grants | If leaked |
 |---|---|---|---|
-| GitHub App private key | bot process | Ability to mint installation tokens for every install of that App | Attacker can comment/review as the bot on all installed repos. Cannot merge or push (permissions don't include it). Rotate in App settings; all outstanding installation tokens expire within 1h. |
-| Cluster API key | bot process | `llm_review`, `whoami`, quota against one tenant | Attacker can burn that tenant's LLM budget. Rotate cluster-side; scoped to one tenant. |
-| LLM provider key | cluster only | Full provider account | Rotate at the provider. **Never** transits the bot, a webhook, `talon-db`, or a log line. |
+| `GITHUB_TOKEN` | the runner, for one job | Whatever the workflow's `permissions:` block declares, on one repo | Expires when the job ends. Nothing to rotate — the next run gets a different token. |
+| Cluster API key | repo/org secret → runner env | `evaluate_pr`, `whoami`, quota against one tenant | Attacker can burn that tenant's LLM budget. Rotate cluster-side; scoped to one tenant. |
+| LLM provider key | cluster only | Full provider account | Rotate at the provider. **Never** transits a runner, `talon-db`, or a log line. |
 
-The isolation that matters: **the bot never holds an LLM provider credential**,
-and the cluster never holds a GitHub credential. Compromising either component
-gets an attacker exactly one of the two capability sets, not both.
+The isolation that matters: **the runner never holds an LLM provider
+credential**, and the cluster never holds a GitHub credential. Compromising
+either gets an attacker exactly one of the two capability sets, not both.
+
+What this design deleted: the GitHub App private key. There is no long-lived
+GitHub credential at all — no key on a server, no JWT signing, no installation
+token cache, no rotation runbook. The most dangerous secret in the previous
+design simply doesn't exist.
 
 ### Handling rules
 
-- Private key and cluster key from env or file, never from repo config, never
-  from a webhook payload.
-- Redaction on the log path — key-shaped values are filtered before write, not
-  filtered by remembering to be careful at each call site.
-- The bot refuses to start if the cluster key is absent or `whoami` fails. No
-  degraded mode where it silently reviews without the engine.
-- `.github/talooner/*.yaml` in a tenant repo is attacker-controllable on a fork PR. It
-  is parsed as data only — no credential fields, no URLs the bot will
+- Cluster key from the runner environment via `secrets.*`, never from repo
+  config, never from an event payload.
+- Redaction on the log path. GitHub masks registered secrets in workflow logs
+  automatically, but that covers exact matches only — key-shaped values are
+  filtered before write, not filtered by remembering to be careful at each call
+  site.
+- The run fails fast if the cluster key is absent or `whoami` fails. No degraded
+  mode where it silently reviews without the engine.
+- `.github/talooner/*.yaml` in a tenant repo is attacker-controllable on a fork
+  PR. It is parsed as data only — no credential fields, no URLs the runner will
   authenticate to, no path escapes above the repo root.
 
-## GitHub App auth chain
+## GitHub auth
 
 ```
-App private key (RS256)
-   └─ sign JWT (iss=app_id, exp≤10m)
-        └─ POST /app/installations/{id}/access_tokens
-             └─ installation token (1h TTL, scoped to that installation)
-                  └─ REST/GraphQL calls
+Actions mints GITHUB_TOKEN for the job
+   └─ scoped to this repo, permissions from the workflow's `permissions:` block
+        └─ REST calls
+             └─ revoked when the job ends
 ```
 
-Tokens cached in memory, refreshed at 55m, never persisted. Rate limits accrue
-per installation — the tenant's own quota, not a shared pool.
+Two properties fall out that a GitHub App had to work for:
 
-Webhook verification: `X-Hub-Signature-256`, HMAC-SHA256 over the raw body with
-the webhook secret, compared in constant time. Unsigned or mismatched
-deliveries are dropped before parsing — the JSON is not decoded until the
-signature checks out, so a malformed-payload parser bug isn't reachable
-pre-auth.
+- **Permissions are in the tenant's repo, in a diff.** `permissions: {pull-requests: write, checks: write, contents: read}` is reviewable by the people it affects, rather than accepted once in an install dialog and forgotten. Widening them is a PR.
+- **No loops.** Events caused by `GITHUB_TOKEN` do not trigger workflows, so Talooner's own comments and check runs cannot start another Talooner run.
+
+Rate limits are 1,000 requests/hour per repo per run — far above what one
+evaluation needs, and they can't be exhausted by another tenant, because there
+isn't one.
+
+### Secrets and fork PRs
+
+The load-bearing rule:
+
+| Trigger | Runs in | Secrets available |
+|---|---|---|
+| `issue_comment` (created) | base repo, default branch | **yes** |
+| `pull_request` from a branch in the repo | base repo | yes |
+| `pull_request` from a fork | base repo, restricted | **no** |
+| `pull_request_target` | base repo, full token | yes — **and it is not used** |
+
+`pull_request_target` is the standard footgun: it runs with secrets against a
+fork's PR ref. Talooner does not use it, and no reference workflow will suggest
+it. The only trigger that carries credentials for fork PRs is
+`issue_comment` — a maintainer typing `@talooner /review`, whose write access is
+then verified against the API before anything else happens.
+
+Because `issue_comment` runs the workflow from the **default branch**, not the
+PR's head, a fork PR also cannot modify the workflow that reviews it. That's the
+same protection the base-branch ruleset rule provides, enforced by GitHub rather
+than by Talooner.
 
 ## Cluster auth
 
-Bot → cluster over gRPC, mTLS or bearer token depending on deployment. On
-connect:
+Runner → cluster over gRPC, mTLS or bearer token depending on deployment. This
+is the one new operational requirement of decision 1: the cluster must be
+reachable from wherever the job runs.
+
+| Cluster exposure | How | Trade-off |
+|---|---|---|
+| Public gRPC + TLS + API key | `OPENTALON_HOST=grpc://talon.example.com:9090` | Simplest. The endpoint is on the internet; the API key is the whole gate |
+| Self-hosted runner | Runner on the cluster's network, cluster stays private | No public exposure; you now operate runners, which is the ops burden decision 1 removed |
+| Tailscale / WireGuard on a hosted runner | Join the network as a workflow step | Middle ground, one more moving part in every run |
+
+Default is the first. The second exists for tenants who won't expose the
+cluster, and it is the honest answer for anyone reviewing private repos on a
+private network.
+
+On connect:
 
 ```
 whoami() → {
@@ -96,21 +138,41 @@ talooner cluster login --url grpc://talon.example.com:9090 --key $OPENTALON_KEY
 talooner cluster whoami
 #   tenant: acme  quota: 4,812 calls  models: claude-*  features: llm_review
 
-# 2. generate a GitHub App manifest, open the browser to create it
-talooner app create --org acme
-#   → writes .talooner-app.json (app id, private key path, webhook secret)
+# 2. wire up a repo
+talooner init --repo acme/api
+#   → writes .github/workflows/talooner.yml
+#   → writes .github/talooner/rules.talon (starter policy)
+#   → gh secret set OPENTALON_HOST / OPENTALON_API_KEY   (prompts, or --org)
 
-# 3. run the bot
-talooner serve --config talooner.yaml
-
-# 4. author and validate rules
+# 3. author and validate rules — all local, no cluster writes
 talooner rules validate .github/talooner/
-talooner rules test .github/talooner/            # runs .talon.test files
+talooner rules test .github/talooner/         # runs .talon.test files
 talooner rules plan --repo acme/api --pr 42   # dry-run against a live PR
 ```
 
-`app create` uses GitHub's App manifest flow, so the tenant creates the App
-under their own org and the operator never sees the private key.
+There is no `talooner serve`. Step 2 is the entire GitHub-side install, it lands
+as a reviewable commit plus two secrets, and it is reversible by deleting a file.
+
+Secrets can be set org-wide instead of per repo (`talooner init --org acme`),
+which is the sane setup for more than a couple of repos — then onboarding a new
+repo is just the workflow file.
+
+### Identity
+
+The reviewer appears as `github-actions[bot]` on every comment, review, and
+check run. Talooner does not register a GitHub App, so there is no display name
+to choose, no globally unique name to claim, and no collision between two orgs
+running it — the problem a per-tenant App would have created.
+
+The handle in comments is still `@talooner`, but it is **not** a GitHub mention:
+it's a plain string the action matches in the comment body, filtered cheaply by
+the workflow's `if:` before a runner even starts. Tenants can change it in
+`config.yaml`; nothing on GitHub's side cares.
+
+Recognisability comes from the action reference — `uses: opentalon/talooner@v1` —
+and from the check-run name, `talooner`, which is what appears in the PR's checks
+list and in branch protection settings. Both are yours, neither requires
+registering anything.
 
 ### `rules plan` matters more than it looks
 
@@ -143,10 +205,16 @@ has tests" is a claim no LLM-based reviewer can make.
 ## Fork PRs and untrusted input
 
 Attacker-controlled on a fork PR: the diff, the title, the body, the branch
-name, every file under `.github/talooner/`. Consequences:
+name, every file under `.github/talooner/`, and the workflow file on the head
+branch. Consequences:
 
 - Ruleset governing **writes** comes from the base branch, always
   (`architecture.md`).
+- The **workflow** that runs also comes from the default branch, because
+  `issue_comment` is the trigger. A fork editing `.github/workflows/talooner.yml`
+  changes nothing about how it is reviewed. GitHub enforces this, not Talooner.
+- A fork push cannot start a credentialled run at all — secrets are withheld from
+  fork-triggered `pull_request` events, and `pull_request_target` is not used.
 - Diff/title/body reaching an LLM prompt is untrusted text. Prompt injection is
   assumed, not prevented — mitigations are structural: the model's output is
   constrained to a fixed enum plus an explanation string, and the enum drives
@@ -155,7 +223,8 @@ name, every file under `.github/talooner/`. Consequences:
   explanation string is rendered as quoted, escaped text in a comment, never
   interpreted.
 - `llm_review` per-PR call cap and per-tenant budget ceiling, enforced
-  cluster-side.
+  cluster-side —
+  [`talooner-plugin/llm-review.md`](https://github.com/opentalon/talooner-plugin/blob/main/llm-review.md).
 
 ## Audit
 

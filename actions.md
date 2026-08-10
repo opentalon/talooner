@@ -8,15 +8,32 @@ whether any of it gates a merge.
 
 ## v1 — native actions
 
+A rule declares these with `do <verb> <args>`
+([`talon-language/docs/actions.md`](https://github.com/opentalon/talon-language/blob/main/docs/actions.md)).
+The engine resolves each argument against the PR's facts and returns the action
+as data; the bot performs it.
+
 | Talon | GitHub effect |
 |---|---|
-| `approve "pr"` | Review with event `APPROVE`, plus check run `talooner` → `success` |
-| `block "pr.merge"` | Check run `talooner` → `failure`, plus review `REQUEST_CHANGES` |
-| `comment "pr" <text>` | Sticky comment, edited in place |
-| `assign "pr" <team-or-user>` | Assignee via Issues API |
-| `require <review.target>` | Review request to the mapped team/user |
-| `notify <target> <text>` | Dispatch through an OpenTalon channel (Slack, etc.) |
-| `emit <name>` | Asserts fact `event.<name> = true`; no GitHub effect |
+| `do approve "pr"` | Review with event `APPROVE`, plus check run `talooner` → `success` |
+| `do block "pr.merge"` | Check run `talooner` → `failure`, plus review `REQUEST_CHANGES` |
+| `do comment "pr" <text>` | Sticky comment, edited in place |
+| `do assign "pr" <team-or-user>` | Assignee via Issues API |
+| `do require <review.target>` | Review request to the mapped team/user |
+| `do notify <target> <text>` | Dispatch through an OpenTalon channel (Slack, etc.) |
+| `do emit <name>` | Asserts fact `event.<name> = true`; no GitHub effect |
+
+Arguments may be literals (`"pr"`), fact references (`attr "user.owner"`), or
+strings carrying interpolation (`"owned by {attr.user.owner}"`). Both are
+resolved cluster-side before the action reaches the bot, so the executor never
+looks a fact up.
+
+**Talon does not validate verb names** — the vocabulary belongs to the host. A
+misspelled `do aprove "pr"` parses cleanly and would otherwise vanish, so
+`validate_ruleset` rejects anything outside this table
+(`talooner-plugin/engine.md`, "The verb list is ours to enforce"). The bot
+enforces it again at execution: an action whose verb has no executor is a hard
+error, never a no-op.
 
 ### `approve` is advisory, and that's the point
 
@@ -88,33 +105,21 @@ So: a PR that was approved and then grows past 500 lines has its approval
 dismissed on the next run. This is why the bot re-derives all facts and
 re-evaluates from scratch on every event rather than applying deltas.
 
-## Conflict resolution — defeasible
+## Conflict resolution happens plugin-side
 
-`approve` and `block` can both fire. Resolved by Talon's defeasible machinery
-(`talon-language/docs/defeasible.md`), not by an ad-hoc "block wins" in
-Talooner:
+`approve` and `block` can both fire. They are resolved by Talon's defeasible
+machinery inside the plugin, not by an ad-hoc "block wins" in the bot —
+`strict` > `overrides` > priority, plus a `strict` base ruleset Talooner always
+loads. Full rules in
+[`talooner-plugin/engine.md`](https://github.com/opentalon/talooner-plugin/blob/main/engine.md),
+"Conflict resolution".
 
-- Safety rules are declared `strict` — they always fire, never defeated.
-- Priority ordering `CRITICAL > HIGH > MEDIUM > LOW`, default `MEDIUM`.
-- `overrides "Rule name"` for explicit defeat, walked transitively.
-- An unresolved tie fires both and warns.
-
-Talooner ships a small **base ruleset** it always loads at low precedence,
-declaring the non-negotiables as `strict`, so a tenant ruleset can't
-accidentally approve something structurally unreviewable:
-
-```talon
-strict rule "Never approve a PR with unresolved conflicts" { ... }
-strict rule "Never approve while required checks are still running" { ... }
-```
-
-An unresolved tie between a tenant `approve` and a tenant `block` resolves
-conservatively: both fire, and since `block` produces a `failure` check run
-while `approve` produces `success` on the same check, the check-run writer
-applies block-wins as a **last-resort** tiebreak and emits a ruleset warning
-telling the maintainer to disambiguate with `overrides` or `priority`. The
-warning is the real product; the tiebreak is just so the check run has one
-value.
+What lands on the bot: an unresolved tie returns **both** actions plus a warning.
+Since `block` produces a `failure` check run and `approve` a `success` on the
+same check, the check-run writer applies block-wins as a **last-resort** tiebreak
+and surfaces the plugin's warning as a comment telling the maintainer to
+disambiguate with `overrides` or `priority`. The warning is the real product; the
+tiebreak is just so the check run has one value.
 
 ## Not implemented: `deploy_preview`, `screenshot`, `scan_dependencies`
 
@@ -127,10 +132,22 @@ and reports the result; the engine reacts:
 
 ```
 tenant's CI builds a preview (their workflow, their infra, their choice of tool)
-  └─ POST /api/v1/facts {"preview.status": "deployed", "preview.url": "..."}
-     └─ engine wakes, `when "preview.status" == "deployed"` fires
-        └─ Talooner comments, requires design review, whatever the rules say
+  └─ POST https://<your-cluster>/api/v1/facts
+       {"preview.status": "deployed", "preview.url": "..."}
+     └─ fact lands in talon-db, scoped to the PR
+        └─ next evaluation: `when attr "preview.status" == "deployed"` fires
+           └─ Talooner comments, requires design review, whatever the rules say
 ```
+
+The facts API is the **cluster's** endpoint, not the bot's — there is no bot to
+POST to (decision 1). Your CI needs the cluster URL and API key, which it
+already has as secrets if it's the same repo.
+
+"Next evaluation" is doing real work in that diagram: in v1 nothing wakes on an
+externally asserted fact. Someone comments `@talooner /review` and the fact is
+picked up then (decision 20, `architecture.md`, "No reactive wake in v1"). A
+tenant who wants it prompt can have their CI POST the fact and then trigger the
+workflow themselves — but v1 ships neither the trigger nor a recipe for it.
 
 This is strictly better than a dispatch action for the same outcome: one
 mechanism instead of two, no webhook registry, no timeout semantics, no
@@ -142,12 +159,13 @@ Consequences:
 - The brief's ruleset **parses and runs as written**. Rules gated on
   `preview.status` or `screenshots.status` simply never fire until something
   asserts those facts. No error, no special-casing, no stub actions.
-- `do deploy_preview "pr"` as a verb doesn't exist. A ruleset using it fails
-  validation with "unknown action" and a pointer to the facts API. Better than
-  accepting it and doing nothing.
+- `do deploy_preview "pr"` is not a verb Talooner serves. It *parses* — Talon
+  accepts any verb — so this is enforced by `validate_ruleset` rejecting it by
+  name, with a pointer to the facts API. Better than accepting it and doing
+  nothing, which is exactly what would happen if nobody checked.
 - Talooner's half of the flow — reacting to preview and screenshot facts,
   requiring design review, posting the gallery link — works from phase 2 with no
-  new machinery.
+  new machinery, at the latency of the next `/review`.
 
 Mapping of the brief's ruleset to phases:
 
@@ -162,36 +180,53 @@ Mapping of the brief's ruleset to phases:
 | Reacting to preview / screenshot / scan facts pushed by tenant CI | v2 |
 | `do deploy_preview` / `do screenshot` / `do scan_dependencies` as verbs | never |
 
-## App permissions
+## Workflow permissions
 
-Minimum for v1:
+Declared in the tenant's own workflow, not in an App registration — so they sit
+in a diff, reviewable by the people they affect:
 
-| Permission | Level | For |
-|---|---|---|
-| Pull requests | write | reviews, comments, assignees, review requests |
-| Checks | write | the `talooner` check run |
-| Contents | read | ruleset, config files, diffs |
-| Metadata | read | mandatory |
-| Members | read | team membership for `review.<team>.approved` |
+```yaml
+permissions:
+  pull-requests: write   # reviews, comments, assignees, review requests
+  checks: write          # the `talooner` check run
+  contents: read         # ruleset, config files, diffs
+```
 
-Explicitly **not** requested: `contents: write`, `administration`, `workflows`.
-Talooner cannot push, cannot merge, cannot change settings, cannot edit CI. If a
-future feature needs one of these, it's a new major version and an explicit
-re-consent by every installation — GitHub forces that, and it's a feature.
+`GITHUB_TOKEN` starts from the repo's default permission set; this block narrows
+it for the job. Everything not listed is unavailable to the run — including
+`contents: write`, `actions`, and `administration`. Talooner cannot push, cannot
+merge, cannot change settings, cannot edit CI, and this is enforced by a token
+GitHub mints rather than by Talooner declining to call an endpoint.
 
-Webhook events subscribed:
+If a future feature needs a wider permission, the tenant edits the workflow. That
+is more honest than an App re-consent dialog: a diff, reviewed by the repo's own
+maintainers, in the repo it affects.
+
+Team membership for `review.<team>.approved` is the one thing `GITHUB_TOKEN`
+cannot read — org membership is out of a repo-scoped token's reach. Options,
+resolved when `review.*` facts land in phase 2: derive team approval from
+CODEOWNERS review requests (no extra permission, covers the common case), or take
+an optional PAT secret for orgs that need real team resolution. The default must
+work with no extra secret.
+
+## Triggers
 
 | Event | Used for |
 |---|---|
-| `issue_comment` (created) | **The v1 entry point** — `@talooner /review`, `/stop`, `/why`, `/plan` |
-| `pull_request` (synchronize, reopened, edited, closed) | Re-evaluate a subscribed PR; unsubscribe on close |
-| `pull_request_review` | `review.*` facts |
-| `check_suite`, `check_run` (completed) | `pr.tests_passing`, `pr.lint_passing` |
-| `installation`, `installation_repositories` | Install lifecycle |
+| `issue_comment` (created) | **The v1 entry point** — `@talooner /review [--force]`, `/stop`, `/why`, `/plan` |
+| `pull_request` (synchronize, reopened, closed) | Re-evaluate a subscribed PR; unsubscribe on close |
+| `pull_request_review` (submitted) | `review.*` facts |
+| `check_suite` (completed) | `pr.tests_passing`, `pr.lint_passing` |
 
-`pull_request opened` is subscribed but does **not** trigger a review in v1 —
-Talooner waits to be asked (`architecture.md`, "Invocation"). Auto-review on
-open, opt-in per repo, is a later phase; it reuses the same subscription path.
+`pull_request opened` deliberately isn't in the list — Talooner waits to be asked
+(`architecture.md`, "Invocation"). Auto-review on open, opt-in per repo, is a
+later phase; it adds a trigger and reuses the same subscription path.
+
+Not used: `pull_request_target`. It runs with secrets against a fork's code and
+is the standard way to get this wrong. See `auth.md`, "Secrets and fork PRs".
+
+Every trigger except `issue_comment` runs only to serve an already-subscribed PR,
+and exits 0 otherwise — a skipped job, not a red X.
 
 Commands are honoured only from users with write access to the repo, checked
 against the installation's permission API on every command. Without that gate,

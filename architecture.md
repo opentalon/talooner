@@ -2,9 +2,9 @@
 
 ## What it is
 
-A GitHub App that reviews pull requests by running the repo's own Talon ruleset.
-No model decides anything. Rules decide; an LLM is consulted only where a rule
-says `do llm_review ...`, and its answer re-enters the engine as a fact.
+A GitHub Action that reviews pull requests by running the repo's own Talon
+ruleset. No model decides anything. Rules decide; an LLM is consulted only where
+a rule says `do llm_review ...`, and its answer re-enters the engine as a fact.
 
 Talooner has **no merge rights in v1.**. It is an advisory reviewer — think of it as a
 linter that speaks human language and can read your docs. It comments, requests
@@ -24,57 +24,85 @@ Nobody's review load can ever land on someone else's API limits, because there i
 no shared anything.
 
 ```
-┌──────────────┐  webhooks   ┌───────────────────┐   gRPC    ┌────────────────────┐
-│  GitHub      │────────────▶│  talooner (bot)   │──────────▶│ OpenTalon cluster  │
-│  (App inst.) │◀────────────│                   │◀──────────│                    │
-└──────────────┘  REST/GQL   │ • App auth        │           │ ┌────────────────┐ │
-                             │ • webhook verify  │           │ │ talooner-plugin│ │
-                             │ • fact extraction │           │ │ • ruleset store│ │
-                             │ • action exec     │           │ │ • Talon engine │ │
-                             │ • STATELESS       │           │ │ • llm_review   │ │
-                             └───────────────────┘           │ │ • explain/audit│ │
-                                      ▲                      │ └───────┬────────┘ │
-                                      │                      │         │          │
-                             ┌────────┴────────┐             │   ┌─────▼──────┐   │
-                             │ talooner CLI    │             │   │  talon-db  │   │
-                             │ (gh extension)  │             │   │ PR facts   │   │
-                             └─────────────────┘             │   └────────────┘   │
-                                                             └────────────────────┘
+┌──────────────────────────────┐            ┌────────────────────┐
+│  GitHub                      │            │ OpenTalon cluster  │
+│                              │            │   (your VPS)       │
+│  PR · comments · checks      │            │                    │
+│            │                 │            │ ┌────────────────┐ │
+│            │ native event    │   gRPC     │ │ talooner-plugin│ │
+│            ▼                 │───────────▶│ │ • ruleset store│ │
+│  ┌────────────────────────┐  │◀───────────│ │ • Talon engine │ │
+│  │ Actions runner         │  │            │ │ • llm_review   │ │
+│  │  opentalon/talooner@v1 │  │            │ │ • explain/audit│ │
+│  │  • fact extraction     │  │            │ └───────┬────────┘ │
+│  │  • action exec         │  │            │         │          │
+│  │  • EPHEMERAL           │  │            │   ┌─────▼──────┐   │
+│  └────────────────────────┘  │            │   │  talon-db  │   │
+│            │ GITHUB_TOKEN    │            │   │ PR facts   │   │
+│            ▼                 │            │   │ decisions  │   │
+│  reviews · comments · checks │            │   └────────────┘   │
+└──────────────────────────────┘            └────────────────────┘
+                  ▲
+      ┌───────────┴─────────┐
+      │ talooner CLI        │   local authoring: rules validate / test / plan
+      │ (gh extension)      │
+      └─────────────────────┘
 ```
+
+The whole GitHub half lives and dies inside one workflow run. There is no server
+to operate, no endpoint to expose, no process to restart.
 
 ### Component split — and why
 
-The bot is **thin and stateless**; all state and all reasoning live cluster-side.
+The action is **thin and ephemeral**; all state and all reasoning live
+cluster-side.
 
 | Concern | Where | Why there |
 |---|---|---|
-| GitHub App JWT → installation token | bot | Needs the App private key; nothing else does |
-| Webhook HMAC verify, event queue | bot | Must answer GitHub within 10s |
-| Fact extraction from the GitHub API | bot | Only the bot holds an installation token |
-| Fact storage, reactive `changes` operator | plugin → talon-db | Facts must outlive a single webhook |
+| Triggering | GitHub Actions | Native events. No webhook receiver, no HMAC, no delivery queue, no 10s deadline |
+| GitHub credentials | Actions runtime | `GITHUB_TOKEN`, minted per run, scoped to one repo, expires when the job ends |
+| Fact extraction from the GitHub API | action | Only the runner holds a token |
+| Fact storage, reactive `changes` operator | plugin → talon-db | Facts must outlive a run that lasts 30 seconds |
 | Ruleset parse, validate, compile | plugin | Rules are evaluated where facts live |
 | Talon engine, defeasible resolution | plugin | Same |
 | `llm_review` | plugin | Only the cluster holds tenant LLM credentials |
 | `explain` / audit trail | plugin → talon-db | Decisions are queried long after the PR closes |
-| Action execution against GitHub | bot | Only the bot holds an installation token |
+| Action execution against GitHub | action | Only the runner holds a token |
 
-The seam is: **the bot knows GitHub and knows nothing about Talon; the plugin
+The seam is: **the action knows GitHub and knows nothing about Talon; the plugin
 knows Talon and knows nothing about GitHub.** The plugin returns an abstract
-action list; the bot translates it into API calls. That keeps `talooner-plugin`
-testable without a GitHub fixture, and keeps the bot free of engine state.
+action list; the action translates it into API calls. That keeps
+`talooner-plugin` testable without a GitHub fixture, and keeps the GitHub half
+free of engine state.
 
-### Why the bot is stateless
+### Why the GitHub half holds nothing
 
-Facts already have to live in `talon-db` for reactive rules
-(`when "pr.files_changed" changes`) to work at all. Duplicating any of it
-bot-side would create a second source of truth for the same PR. So the bot keeps
-nothing across requests except its in-memory queue; a restart mid-PR loses at
-most an unprocessed webhook, which GitHub redelivers.
+It cannot. A workflow run is a fresh container that exits when the job ends.
+Everything that must survive between events — facts, subscriptions, decisions,
+`explain` output, `llm_review` results — is in `talon-db` already, because
+reactive rules (`when "pr.files_changed" changes`) required that regardless.
 
 Subscription state (which PRs were invoked with `@talooner /review`) is state
-too, so it lives cluster-side as a fact like everything else. The bot asks the
-plugin "is this PR subscribed?" rather than remembering. A bot restart must not
-silently stop reviewing a PR someone asked it to watch.
+too, so it lives cluster-side as a fact like everything else. Each run asks the
+plugin "is this PR subscribed?" rather than remembering.
+
+This is the same design as before this decision — the GitHub half was already
+specified as stateless. Moving it into a runner just removed the ability to
+cheat.
+
+### What this costs
+
+Stated plainly, because it is a real trade:
+
+- **Nothing is alive between events.** A fact POSTed by your CI cannot produce a
+  comment on its own; see "No reactive wake in v1" below.
+- **Cold start per event.** Roughly 10–30s of runner startup before Talooner does
+  anything. Irrelevant for a reviewer, fatal for anything interactive.
+- **The cluster must be reachable from the runner.** A public gRPC endpoint with
+  TLS and an API key, or a self-hosted runner on the same network. This is the
+  one genuinely new operational requirement.
+- **Actions minutes.** Free on public repos, billed to the tenant on private
+  ones. Consistent with the rest of the model: you pay for your own reviews.
 
 ## Repos
 
@@ -82,7 +110,7 @@ Two repos. They are separate concepts and they version independently.
 
 | Repo | Module | Contents |
 |---|---|---|
-| `talooner` | `github.com/opentalon/talooner` | The bot: GitHub App service + CLI (`cmd/talooner-bot`, `cmd/talooner`) |
+| `talooner` | `github.com/opentalon/talooner` | The action (`action.yml` + `cmd/talooner-action`) and the CLI (`cmd/talooner`) |
 | `talooner-plugin` | `github.com/opentalon/talooner-plugin` | OpenTalon gRPC plugin: engine, ruleset store, fact store, `llm_review`, and **the proto** |
 
 The shared proto lives in `talooner-plugin`, since the plugin is the server and
@@ -90,19 +118,25 @@ owns the contract. The bot imports the generated Go package as a normal tagged
 dependency — the same relationship `mcp-plugin` has with `opentalon`. Landing
 order for a contract change: plugin first, tag, then bump the bot.
 
+Everything cluster-side is documented in that repo and not duplicated here. The
+docs in `talooner/` describe the bot, the GitHub surface, and the contract from
+the caller's side.
+
 Naming: **Talooner** is the ecosystem *and* the bot. The bot is plain `talooner`;
 everything else in the ecosystem is `talooner-*`.
 
-### Bot repo layout
+### Action repo layout
 
 ```
 talooner/
+  action.yml              # the action definition — inputs, runs: docker
+  Dockerfile              # pinned image, so a run doesn't compile Go
   cmd/
-    talooner-bot/         # the GitHub App service
+    talooner-action/      # entrypoint: one event in, actions executed, exit
     talooner/             # the CLI / gh extension
   internal/
-    githubapp/            # JWT → installation token, REST + GraphQL client
-    webhook/              # receive, HMAC verify, enqueue
+    github/               # REST client over GITHUB_TOKEN
+    event/                # parse GITHUB_EVENT_PATH into {repo, pr, trigger}
     command/              # @talooner /review /stop /why /plan + write-access gate
     facts/                # extractors: diff, checks, CODEOWNERS, modules, teams
     action/               # executor interface + one file per Talon verb
@@ -123,8 +157,8 @@ talooner/
 Three things this layout is deliberately encoding:
 
 **`command/` and `action/` are not the same concept.** A *command* is a human
-typing `@talooner /review` in a PR comment — it arrives from a webhook, is gated
-on write access, and decides *whether to evaluate*. An *action* is a Talon verb
+typing `@talooner /review` in a PR comment — it arrives in the event payload, is
+gated on write access, and decides *whether to evaluate*. An *action* is a Talon verb
 the plugin returned — it arrives as data from the engine and decides *what to do
 to GitHub*. Different inputs, different auth, different tests. Collapsing them
 into one package makes the write-access gate ambiguous, which is a security
@@ -152,22 +186,16 @@ workspace, and `internal/` is enforced by the compiler rather than by agreement.
 
 ### Dependency chain
 
-`talooner-plugin` links `talon-language`, which carries
-`replace github.com/opentalon/talon-db => ../talon-db`. A `replace` is not
-transitive through a dependency — the **consuming** module must restate it. So
-`talooner-plugin/go.mod` needs both:
-
-```
-replace github.com/opentalon/talon-db => ../talon-db
-```
-
-and a sibling `talon-db/` checkout, plus the same CI clone step
-`talon-language/.github/workflows/ci.yml` uses. This is the documented workspace
-convention (`CLAUDE.md`, "Cross-repo wiring"), not a workaround.
-
 The bot links neither `talon-language` nor `talon-db` — it only speaks the
-plugin's gRPC contract. That mirrors `opentalon-agents`, which deliberately
-links no `talon-language` code.
+plugin's contract, consuming the generated Go package as a normal tagged
+dependency. That mirrors `opentalon-agents`, which deliberately links no
+`talon-language` code, and it's why the bot builds without a sibling `talon-db/`
+checkout.
+
+The plugin does link both, and therefore inherits the workspace's `replace`
+convention. See
+[`talooner-plugin/deployment.md`](https://github.com/opentalon/talooner-plugin/blob/main/deployment.md),
+"Dependency chain" — read it before the first build over there.
 
 ## Invocation — explicit in v1
 
@@ -190,6 +218,11 @@ Reasons this is right for v1, beyond it being less work:
 - **Fork PRs.** An attacker opening a fork PR can't make the bot do anything; a
   maintainer has to invoke it. This weakens — though does not remove — the fork
   threat model below.
+- **Secrets.** GitHub does not expose repo secrets to workflows triggered by
+  `pull_request` from a fork. `issue_comment` runs in the base repo's context and
+  does. So under decision 1, explicit invocation isn't only a UX choice — it is
+  the trigger on which Talooner can reach the cluster at all. A fork push
+  literally cannot start a run with credentials.
 
 Once invoked on a PR, the PR is **subscribed**: subsequent pushes and check
 completions re-evaluate automatically, because that's what the reactive rules
@@ -203,7 +236,8 @@ Command surface in v1:
 
 | Command | Effect |
 |---|---|
-| `@talooner /review` | Evaluate now, subscribe this PR |
+| `@talooner /review` | Evaluate now, subscribe this PR. Always a full re-evaluation |
+| `@talooner /review --force` | Same, but bypass the `llm_review` fact cache at this sha — costs money |
 | `@talooner /stop` | Unsubscribe |
 | `@talooner /why` | Render `explain` for the current head sha |
 | `@talooner /plan` | Evaluate the head-branch ruleset with no writes |
@@ -211,48 +245,121 @@ Command surface in v1:
 Commands are honoured only from users with write access to the repo. Otherwise
 any drive-by account could invoke reviews and burn the maintainer's LLM budget.
 
+### Re-invoking `/review`
+
+`/review` re-extracts every fact and re-evaluates, every time. There is no
+re-render shortcut and no "nothing changed" path, because there is nothing to
+optimise: `llm_review` results are facts keyed by `(pr, head_sha, doc_url,
+prompt_version)` (decision 9), so a second evaluation at the same sha reads the
+stored fact instead of calling a model. The expensive part is already cached by
+construction; the rest is a handful of GitHub API reads and an engine run.
+
+Always re-evaluating is also what makes manual wake work. Externally asserted
+facts — `preview.status` POSTed by your CI — only enter a verdict when something
+re-evaluates, and in v1 that something is a human typing `/review`.
+
+`--force` busts the `llm_review` cache at the current sha. Use it when the input
+didn't change but the answer might: a nondeterministic model, an edited base
+ruleset, an extractor fixed since the last run. It maps to a cache-bypass
+argument on the plugin's `evaluate_pr`, is gated by the same write-access check,
+and is the only command in v1 that can spend LLM budget on a sha already
+answered.
+
+### No reactive wake in v1
+
+Talon's reactive rules still work — they fire when facts change *during* an
+evaluation. What v1 does not have is anything to notice a fact changing while no
+run is in progress.
+
+Concretely: your CI POSTs `preview.status = "deployed"` an hour after the last
+run. The engine has no process to wake, and the cluster deliberately holds no
+GitHub credentials, so it cannot comment on its own. The fact sits in `talon-db`
+until the next evaluation, which a maintainer triggers with `/review`.
+
+This is accepted for v1, not overlooked. The alternatives all cost something:
+
+| | How | Why not v1 |
+|---|---|---|
+| `repository_dispatch` | Tenant CI POSTs the fact, then dispatches a run | Two calls in the tenant's workflow, and a second trigger path to document and secure |
+| `schedule` | Cron workflow polls for pending actions | 5-minute floor, burns Actions minutes on repos with nothing to do |
+| Long-running bot | What decision 1 removed | Reintroduces the process, the endpoint, and the ops burden |
+
+`repository_dispatch` is the likely phase-4 answer if manual wake proves
+annoying. It is additive — same evaluation path, one more trigger in the
+workflow — so deferring it costs nothing later.
+
 ## Request flow
 
-### Ingest
+### Trigger
 
 ```
-POST /webhook
-  ├─ verify X-Hub-Signature-256 (HMAC-SHA256, webhook secret)
-  ├─ reject unknown event types
-  ├─ enqueue {delivery_id, event, payload}
-  └─ 202 Accepted            ← must be under 10s, GitHub's timeout
+GitHub event (issue_comment | pull_request | check_suite)
+  └─ workflow `if:` filters obvious non-matches before a runner starts
+       └─ runner boots, action entrypoint reads GITHUB_EVENT_PATH
 ```
 
-Delivery id is the idempotency key. GitHub redelivers on timeout; a redelivered
-id that already produced a completed run is dropped.
+No signature verification, no delivery queue, no 10-second deadline — the event
+arrives as a JSON file on disk in a container GitHub already authenticated. The
+whole `webhook/` package this design used to need is gone.
+
+Idempotency was keyed on webhook delivery id; it is now `(head_sha, event,
+run_attempt)`, deduped plugin-side. GitHub re-running a job is the only
+redelivery, and it's explicit.
 
 ### Evaluate
 
 ```
-worker picks {installation_id, repo, pr}
-  0. is this PR subscribed? (invoked via @talooner /review)  — else drop
-  1. mint installation access token (cached, 1h TTL, refresh at 55m)
-  2. load ruleset  ← BASE branch (see "Fork safety")
-  3. extract facts (see facts.md)
-  4. plugin action "evaluate_pr" {repo, pr, head_sha, facts JSON, ruleset, mode}
-     (an OpenTalon plugin action, not a bespoke rpc — see plugin.md)
+runner starts with {repo, pr, event, GITHUB_TOKEN}
+  0. is this PR subscribed? (invoked via @talooner /review)  — else exit 0
+  1. load ruleset  ← BASE branch (see "Fork safety")
+  2. extract facts (see facts.md)
+  3. plugin action "evaluate_pr" {repo, pr, head_sha, facts JSON, ruleset, mode}
+     (an OpenTalon plugin action, not a bespoke rpc —
+      see talooner-plugin/protocol.md)
        └─ plugin: assert facts into talon-db, run engine,
                   resolve conflicts (defeasible), issue llm_review as needed,
                   return actions + explanation
-  5. execute actions against GitHub (see actions.md)
-  6. record outcome
+  4. execute actions against GitHub (see actions.md)
+  5. record outcome, exit
 ```
 
-`llm_review` runs *inside* step 4, cluster-side, synchronously from the engine's
-point of view. The bot never sees an LLM.
+Step 0 exiting non-error matters: an unsubscribed PR must show a skipped job, not
+a red X on someone's PR.
+
+`llm_review` runs *inside* step 3, cluster-side, synchronously from the engine's
+point of view. The runner never sees an LLM.
 
 ### Concurrency
 
-One in-flight evaluation per PR, serialized. A push arriving mid-evaluation
-cancels the in-flight run — its head sha is already stale, and its actions would
-be wrong. Actions are idempotent by construction: comments are sticky (edited in
-place, keyed by a marker), check runs are updated by name, reviews are dismissed
-and re-issued rather than stacked.
+Handled by the workflow first, with the plugin as a backstop:
+
+```yaml
+concurrency:
+  group: talooner-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+```
+
+One run per PR at a time. `cancel-in-progress: false` because a cancelled run can
+leave GitHub half-written — the actions are idempotent, but a killed container
+doesn't finish the set. Queueing instead means the later run starts from current
+facts anyway, so a stale in-flight evaluation self-corrects rather than needing
+to be killed.
+
+That block is in the tenant's file, though, and they can delete it. So the plugin
+enforces the same thing from its side: a second `evaluate_pr` for a `(repo, pr)`
+already in flight is rejected with a 409 rather than queued. It has to be — fact
+assertion is a non-atomic read-modify-write, so two overlapping runs would
+interleave into a mixed fact set rather than the later one simply winning
+(`talooner-plugin/OPEN-QUESTIONS.md` A7, B6).
+
+Actions remain idempotent by construction: comments are sticky (edited in place,
+keyed by a marker), check runs are updated by name, reviews are dismissed and
+re-issued rather than stacked.
+
+One free property comes with this: events triggered by `GITHUB_TOKEN` do not
+trigger further workflows. Talooner's own comments and check runs cannot start
+another Talooner run. Under a webhook bot, loop prevention was code you had to
+write and test.
 
 ## Fork safety
 
@@ -278,14 +385,19 @@ per-tenant budget ceiling enforced cluster-side by the plugin.
 
 ## Auth
 
-Three independent credentials. See `auth.md`.
+Three credentials, two of which Talooner never stores. See `auth.md`.
 
-1. **GitHub App private key** — bot only. Signs a JWT, exchanged for a
-   short-lived installation token scoped to one install.
-2. **Cluster API key** — bot → OpenTalon. Presented on connect; `whoami` returns
-   tenant id, quota, enabled models. The bot refuses to start without it.
-3. **LLM provider credentials** — cluster only. Never transit the bot, never
-   appear in a webhook, never land in `talon-db`.
+1. **`GITHUB_TOKEN`** — minted by Actions per run, scoped to the one repo, dies
+   with the job. Permissions are declared in the workflow, not in an App
+   registration, so they're visible in the tenant's own diff.
+2. **Cluster API key** — runner → OpenTalon, from `secrets.OPENTALON_API_KEY`.
+   Presented on connect; `whoami` returns tenant id, quota, enabled models. The
+   run fails fast without it.
+3. **LLM provider credentials** — cluster only. Never reach the runner, never
+   appear in a workflow, never land in `talon-db`.
+
+There is no long-lived GitHub credential anywhere in this design. Nothing to
+rotate, nothing to leak from a server that doesn't exist.
 
 ## Determinism
 
@@ -305,24 +417,38 @@ already recorded.
 
 ## Deployment
 
-**Fully self-hosted, permanently.** You run the OpenTalon cluster, the
-`talooner-plugin` inside it, and the bot, and you register your own GitHub App
-via the App manifest flow (the CLI generates the manifest). Nobody else ever
-holds your secrets, because there is nobody else — there is no operator, no
-central service, no shared App.
+**Fully self-hosted, permanently.** You run the OpenTalon cluster and the
+`talooner-plugin` inside it. The GitHub half you don't run at all — it's a
+workflow file and two secrets, and the compute is GitHub's. Nobody else ever
+holds your secrets, because there is nobody else: no operator, no central
+service, no shared App.
+
+What you install, end to end:
+
+```
+1. cluster on your VPS, reachable over TLS       (once)
+2. commit .github/workflows/talooner.yml         (per repo, 20 lines)
+3. set OPENTALON_HOST + OPENTALON_API_KEY        (per repo or org-wide)
+```
 
 Consequences, stated plainly since they're the cost of this model:
 
-- Onboarding is "provision a VPS", not "click install". That is a real adoption
-  ceiling and it will not be lifted.
+- Onboarding is still "provision a VPS", not "click install". Steps 2–3 are
+  trivial; step 1 is the adoption ceiling and it will not be lifted.
 - There is no telemetry, no central error reporting, no way to know how many
   installs exist or what broke on them. Bug reports arrive only if someone files
   one.
+- Every tenant pins their own action version (`@v1`, or a sha). A bad release
+  doesn't propagate until someone bumps — good for blast radius, bad for
+  security fixes reaching people.
 - Every tenant runs a different version. Cross-repo compatibility between
   `talooner` and `talooner-plugin` has to be an explicit versioned contract, not
   an assumption — the version-skew failure mode the workspace `CLAUDE.md` already
-  warns about, except now the two halves are operated by the same person on the
-  same box, which makes it tractable.
+  warns about. It's now slightly worse than "same person, same box": the action
+  version is pinned per repo in a workflow file, while the plugin version is
+  whatever the cluster runs. `whoami` returning a protocol version, checked at
+  run start, is how that stays a clear error instead of a strange one.
 
 The upside is that the security posture is trivial to reason about: the operator
-holds no tenant secrets because the operator does not exist.
+holds no tenant secrets because the operator does not exist, and the tenant holds
+no long-lived GitHub secret because Actions mints one per run.

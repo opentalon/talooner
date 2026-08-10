@@ -1,0 +1,30 @@
+name: Talooner
+description: Deterministic PR review — your repo's Talon rules decide, not a model
+author: OpenTalon
+
+inputs:
+  opentalon_host:
+    description: >-
+      Host:port of the OpenTalon cluster running talooner-plugin, reachable from
+      this runner over TLS.
+    required: true
+  opentalon_api_key:
+    description: API key for that cluster. Store it as a repo or org secret.
+    required: true
+  github_token:
+    description: >-
+      Token used for every GitHub read and write. Defaults to the run's
+      GITHUB_TOKEN, which is what makes Talooner post as github-actions[bot].
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: docker
+  # Published by the release workflow. Pinned to a digest at tag time so that
+  # `uses: opentalon/talooner@<sha>` resolves to exactly one image forever;
+  # on main it tracks the floating v1 tag.
+  image: docker://ghcr.io/opentalon/talooner:v1
+
+branding:
+  icon: check-circle
+  color: purple

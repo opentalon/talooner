@@ -1,0 +1,4 @@
+bin/
+
+# Session handoff scratch — local state, not product docs
+next_agent.md
