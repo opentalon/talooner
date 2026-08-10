@@ -17,7 +17,8 @@ own LLM credentials. There is no hosted tier and no plan for one.
 
 > **Status: design phase.** This repo currently contains design documents only —
 > no code, no binary, nothing runnable. Everything here is subject to change
-> until phase 1 lands. See `roadmap.md`.
+> until the walking skeleton lands. See the
+> [v1 milestone](https://github.com/opentalon/talooner/milestone/1).
 
 ## Example
 
@@ -106,8 +107,10 @@ claim no LLM-based reviewer can make.
 | `facts.md` | Fact vocabulary, extraction, three-valued semantics |
 | `actions.md` | Action catalog, GitHub semantics, conflict resolution, App permissions |
 | `auth.md` | Credentials, onboarding CLI, untrusted input, audit |
-| `roadmap.md` | Phases 0–4, and what this drags into the other repos |
-| `OPEN-QUESTIONS.md` | Phase-0 findings and the calls made on them |
+
+Phasing and remaining work live in the
+[v1 milestone](https://github.com/opentalon/talooner/milestone/1) rather than in
+a doc.
 
 The server side is documented in its own repo:
 [`talooner-plugin`](https://github.com/opentalon/talooner-plugin) — protocol,
@@ -166,14 +169,16 @@ the standing cost; 4–5 are a two-minute setup per repo. Details in `auth.md`.
 
 ## Contributing
 
-Design phase, so the highest-value contribution right now is disagreement.
-`OPEN-QUESTIONS.md` records what was decided and why — including one accepted
-risk (unset facts read as false, so a failed extraction can approve) that is
-worth arguing with if you think it's wrong. The phase-0 substrate questions are
-answered in
+Design phase, so the highest-value contribution right now is disagreement. The
+decisions table above records what was chosen; `facts.md` records the one
+accepted risk (unset facts read as false, so a failed extraction can approve)
+that is worth arguing with if you think it's wrong. The phase-0 substrate
+questions are answered in
 [`talooner-plugin/OPEN-QUESTIONS.md`](https://github.com/opentalon/talooner-plugin/blob/main/OPEN-QUESTIONS.md);
-three of them turned into upstream fixes, all landed 2026-08-07, so the phase-0
-exit artifact is the next thing to write and nothing is waiting on the substrate.
+three of them turned into upstream fixes, all landed 2026-08-07, and the phase-0
+exit artifact
+([`examples/talooner_review.talon`](https://github.com/opentalon/talon-language/blob/main/examples/talooner_review.talon))
+is in `talon-language` with a passing test suite.
 
 ## License
 

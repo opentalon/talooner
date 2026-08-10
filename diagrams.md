@@ -3,8 +3,7 @@
 Shareable overview for the dev team. Mermaid, so it renders on GitHub and stays
 diffable in review.
 
-Companion docs: `architecture.md` (prose), `facts.md`, `actions.md`, `auth.md`,
-`roadmap.md`.
+Companion docs: `architecture.md` (prose), `facts.md`, `actions.md`, `auth.md`.
 
 ## Notation
 
