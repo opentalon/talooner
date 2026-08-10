@@ -68,7 +68,7 @@ that marked its check required. Fail open on *Talooner's own* faults; fail
 closed on *policy* outcomes.
 
 Ruleset syntax errors surface as check-run annotations pinned to the offending
-line in the `.talon` file, plus one summary comment.
+line in the `.tln` file, plus one summary comment.
 
 ### Sticky comments
 

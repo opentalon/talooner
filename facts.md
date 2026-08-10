@@ -20,11 +20,11 @@ your-repo/
     workflows/
       talooner.yml       ← the trigger + the two secrets
     talooner/
-      rules.talon          ← the review policy
-      rules.talon.test     ← tests for the policy
-      config.yaml          ← check-name patterns, caps, toggles
-      modules.yaml         ← module → docs URL / owner
-      teams.yaml           ← logical team → GitHub team
+      rules.tln        ← the review policy
+      rules.tln.test   ← tests for the policy
+      config.yaml      ← check-name patterns, caps, toggles
+      modules.yaml     ← module → docs URL / owner
+      teams.yaml       ← logical team → GitHub team
 ```
 
 So yes: to add Talooner to your repo you commit these files to your repo. The

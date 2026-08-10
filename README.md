@@ -22,7 +22,7 @@ own LLM credentials. There is no hosted tier and no plan for one.
 
 ## Example
 
-A repo declares its policy in `.github/talooner/rules.talon`:
+A repo declares its policy in `.github/talooner/rules.tln`:
 
 ```talon
 define "small_change" {
@@ -56,7 +56,7 @@ rule "Require human review for critical paths" {
 ```
 
 The runnable version of this ruleset, with a passing test suite, is
-[`examples/talooner_review.talon`](https://github.com/opentalon/talon-language/blob/main/examples/talooner_review.talon)
+[`examples/talooner_review.tln`](https://github.com/opentalon/talon-language/blob/main/examples/talooner_review.tln)
 in `talon-language`.
 
 and wires up the action in `.github/workflows/talooner.yml`:
@@ -95,7 +95,7 @@ Your LLM credentials are not in that workflow and never touch the runner. They
 live in your cluster, which is the only thing that talks to a model.
 
 Because the policy is a file in your repo, it is versioned, diffable, reviewable,
-and unit-testable with `.talon.test` before it ever gates a real PR. That is a
+and unit-testable with `.tln.test` before it ever gates a real PR. That is a
 claim no LLM-based reviewer can make.
 
 ## Docs
@@ -163,7 +163,7 @@ the standing cost; 4–5 are a two-minute setup per repo. Details in `auth.md`.
 | Repo | Role |
 |---|---|
 | [`opentalon`](https://github.com/opentalon/opentalon) | Core orchestration platform and plugin host |
-| [`talon-language`](https://github.com/opentalon/talon-language) | The Talon DSL: grammar, parser, inference engine, `.talon.test` |
+| [`talon-language`](https://github.com/opentalon/talon-language) | The Talon DSL: grammar, parser, inference engine, `.tln.test` |
 | [`talon-db`](https://github.com/opentalon/talon-db) | Embedded fact store backing Talon |
 | [`talooner-plugin`](https://github.com/opentalon/talooner-plugin) | Server side — engine, fact store, proto |
 
@@ -177,7 +177,7 @@ questions are answered in
 [`talooner-plugin/OPEN-QUESTIONS.md`](https://github.com/opentalon/talooner-plugin/blob/main/OPEN-QUESTIONS.md);
 three of them turned into upstream fixes, all landed 2026-08-07, and the phase-0
 exit artifact
-([`examples/talooner_review.talon`](https://github.com/opentalon/talon-language/blob/main/examples/talooner_review.talon))
+([`examples/talooner_review.tln`](https://github.com/opentalon/talon-language/blob/main/examples/talooner_review.tln))
 is in `talon-language` with a passing test suite.
 
 ## License
