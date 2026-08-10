@@ -10,13 +10,15 @@ lifetime, namespace enforcement, retention — is
 
 ## Where configuration lives
 
-In the repo being reviewed. Talooner reads it with the installation token it
+In the repo being reviewed. Talooner reads it with the `GITHUB_TOKEN` the run
 already has; there is nowhere else it could live without inventing a second
 source of truth outside version control.
 
 ```
 your-repo/
   .github/
+    workflows/
+      talooner.yml       ← the trigger + the two secrets
     talooner/
       rules.talon          ← the review policy
       rules.talon.test     ← tests for the policy
@@ -89,9 +91,10 @@ Semantics, and they matter:
 - any still `queued`/`in_progress` → **fact unset**, not `false`
 - no check matches any pattern → **fact unset**, not `true`
 
-See "Unset is not false" below. A rule that auto-approves on
-`"pr.tests_passing" == true` must not fire while CI is still running, and must
-not fire on a repo that has no tests at all.
+See "Unset is false" below. A rule that auto-approves on
+`attr "pr.tests_passing" == true` must not fire while CI is still running, and must
+not fire on a repo that has no tests at all — leaving the fact unset achieves
+that, because a positive condition on an unset fact doesn't match.
 
 ### `pr.new_dependencies`
 
@@ -140,18 +143,27 @@ Usable in conditions and as an action target:
 
 ```talon
 rule "Tag the owner on critical paths" {
-  when is "critical_path"
-  do assign "pr" "user.owner"
-  do comment "pr" "Touches code owned by {user.owner} — their review is required"
+  for records where type == "pr"
+    and is "critical_path"
+  requires "review.senior_engineer"
+  do assign "pr" attr "user.owner"
+  do comment "pr" "Touches code owned by {attr.user.owner} — their review is required"
 }
 
 rule "Escalate when the author owns the code they changed" {
-  when is "critical_path"
-    and "user.owner" == "pr.author"
+  for records where type == "pr"
+    and is "critical_path"
+    and attr "user.owner" == attr "pr.author"
+  requires "review.senior_engineer"
   do require "review.senior_engineer"
   do comment "pr" "Author is the code owner — needs an independent reviewer"
 }
 ```
+
+`attr "user.owner"` in an action argument is resolved by the **engine** against
+the matched row, not passed through as the string `"user.owner"` for the bot to
+look up. Same for `{attr.user.owner}` in the comment body. See
+[`talon-language/docs/actions.md`](https://github.com/opentalon/talon-language/blob/main/docs/actions.md).
 
 That second rule is the case that motivates the namespace: self-review of
 critical code is invisible to CODEOWNERS (GitHub won't request a review from the
@@ -167,33 +179,48 @@ the same validation, testing, and `explain` treatment as everything else:
 
 ```talon
 define "pr.touches_auth" {
-  "pr.changed_files" contains "internal/auth/"
-    or "pr.changed_files" contains "app/models/user.rb"
+  attr "pr.changed_files" contains "internal/auth/"
+    or attr "pr.changed_files" contains "app/models/user.rb"
 }
 
 define "pr.touches_payments" {
-  "pr.changed_files" contains "billing/"
-    or "pr.changed_files" matches "**/payment*"
+  attr "pr.changed_files" contains "billing/"
+    or attr "pr.changed_files" contains "payment"
 }
 
 define "ui_change" {
-  "pr.changed_files" matches "**/*.css"
-    or "pr.changed_files" matches "**/*.scss"
-    or "pr.changed_files" contains "app/components/"
+  attr "pr.changed_files" ends_with ".css"
+    or attr "pr.changed_files" ends_with ".scss"
+    or attr "pr.changed_files" contains "app/components/"
 }
 ```
 
 `grammar.ebnf:515` gives `contains | starts_with | ends_with | matches
-[phrase]`. **Open item:** those operators are specified against a string
-operand. `pr.changed_files` is a list, so `contains` must mean "any element
-contains" and `matches` must mean "any element matches" — existential
-quantification over the list. Confirm the executor does this; if it doesn't,
-it's a small change in `talon-language/internal/executor` and worth making
-generally, not a Talooner special case.
+[phrase]` against a **string** operand. `pr.changed_files` is a list, so these
+predicates have to mean "any element contains / ends with" — existential
+quantification over the list.
 
-Fallback if list semantics turn out to be a problem: also assert
-`pr.changed_paths_joined` (newline-joined) so plain string `contains` works.
-Ugly; prefer fixing the operator.
+**They do, since 2026-08-07.** Phase 0 found they didn't — both evaluator paths
+type-asserted their operands to `string` and returned false for a list, with no
+diagnostic. Fixed generally in `talon-language` rather than worked around here:
+[`talon-language#158`](https://github.com/opentalon/talon-language/issues/158),
+landed in `talon-language` 35109f0 and `talon-db` e1c8ddb, so both backends
+quantify. The `pr.changed_paths_joined` fallback is dropped.
+
+**There is no glob matching, and that is what these examples used to assume.**
+`matches` is a contiguous case-insensitive substring scan locally and term-AND on
+Datalevin — `matches "**/*.css"` matches nothing, because no path contains that
+text. Write path predicates with `contains`, `starts_with`, and `ends_with`. The
+cost is precision: `contains "payment"` also matches `docs/payment-notes.md`, and
+`ends_with ".css"` can't exclude `vendor/`. Narrow with a prefix
+(`starts_with "app/"`) when that matters. Real glob support is a possible
+`talon-language` ask, not a blocker.
+
+One edge that follows from the quantification: a list with **no string elements
+matches nothing** — there is no fallback to the scalar path. An empty
+`pr.changed_files` therefore fails every positive predicate, which is why the
+extractor asserts the fact even when the list is empty rather than leaving it
+unset (see "Unset is false" below).
 
 ## `module.*` and `team.*` — lookup tables
 
@@ -226,7 +253,7 @@ evaluation model:
 - `module.documentation_urls` (list) is still asserted, so a rule *can* reference
   all of them — a future `llm_review` variant could take the list.
 - A ruleset that wants per-module strictness can require narrow PRs:
-  `when "module.touched_count" > 1 do comment "pr" "Split this PR by module"`.
+  `when attr "module.touched_count" > 1 do comment "pr" "Split this PR by module"`.
 
 `module.touched_count` is asserted for exactly this.
 
@@ -277,7 +304,7 @@ Authorization: Bearer <tenant token>
 ```
 
 Asserting a fact wakes the engine, so reactive rules
-(`when "preview.status" == "deployed"`) fire. This is the mechanism behind every
+(`when attr "preview.status" == "deployed"`) fire. This is the mechanism behind every
 v2 action: Talooner doesn't build preview environments, it reacts to a fact
 saying one exists.
 
@@ -285,39 +312,58 @@ Custom fact names are namespaced away from `pr.*` and `review.*` — CI cannot
 overwrite a built-in fact. Without that, a workflow could POST
 `pr.tests_passing: true` and defeat the entire ruleset.
 
-## Unset is not false
+## Unset is false, and that asymmetry is load-bearing
 
-The single most dangerous detail here.
+The single most dangerous detail here. Phase 0 settled it, and not the way this
+document originally assumed.
 
-`"module.documentation_url" != ""` on an **unset** fact must not match. If unset
-coerces to the empty string, every module without docs matches `!= ""` as false
-— fine — but the inverse pattern (`"pr.touches_auth" == false` on a fact that
-failed to compute) would silently classify a critical PR as safe and auto-approve
-it.
+`talon-language`'s evaluator is **two-valued**, with closed-world
+negation-as-failure. There is no `unknown`. A missing attribute makes its pattern
+fail, which makes any enclosing `not` *succeed*. Verified against both backends —
+see `talooner-plugin/OPEN-QUESTIONS.md` A1 for the probe and the code
+references.
 
-Rules:
+The consequence splits by condition shape, and the split is what to remember:
 
-1. A condition on an unset fact evaluates to **unknown**, not false.
-2. A rule with any unknown condition **does not fire**.
-3. `not is "critical_path"` where `critical_path` is unknown is **also
-   unknown** — negation of unknown is unknown, not true. This is the case that
-   would otherwise auto-approve a PR whose fact extraction failed.
-4. Rules that didn't fire due to unknowns appear in `explain` output, so a
-   maintainer can see "would have approved but `tests_passing` was unset".
+| Condition | Fact unset | Safe? |
+|---|---|---|
+| `attr "pr.tests_passing" == true` | doesn't match, rule doesn't fire | yes |
+| `attr "module.documentation_url" != ""` | doesn't match | yes |
+| `not is "critical_path"` | **matches, rule fires** | **no** |
+| `not attr "pr.touches_auth" == true` | **matches, rule fires** | **no** |
 
-Confirm points 1–3 against `talon-language`'s actual evaluator before relying on
-them. If the engine is two-valued, this becomes a prerequisite change in
-`talon-language`, not a Talooner-local concern — and it's the first thing to
-verify in phase 0 (`talooner-plugin/OPEN-QUESTIONS.md` A1).
+Positive conditions on an unset fact fail closed: the rule simply doesn't fire.
+That is why the bot still leaves a fact **unset** rather than guessing a
+default — `pr.tests_passing` while CI is running, or on a repo with no matching
+checks. A rule gated on `attr "pr.tests_passing" == true` correctly stays quiet in
+both cases.
 
-This is why the bot leaves a fact **unset** rather than guessing a default —
-`pr.tests_passing` while CI is still running, or on a repo with no matching
-checks. Extraction's job is to be honest about what it doesn't know; the engine's
-job is not to treat that as `false`.
+Negated conditions fail *open*. A rule shaped `not is "critical_path"` reads a
+failed extraction as "not on the critical path" and approves. **v1 accepts this
+risk** — see the A1 decision — which makes two things the author's
+responsibility:
+
+- Extraction asserts facts explicitly, negative cases included. Unset means "the
+  extractor never ran or died", not "we determined it's false".
+- Rules that grant something (`allow`, approve) should be gated on positive
+  conditions wherever possible. Every `not`-shaped rule is a path from "extractor
+  crashed" to "approved", and nothing in the review output will say so.
+
+The guard that closes this — a `strict` rule on a `pr.facts_complete` flag — is
+written out in `talooner-plugin/OPEN-QUESTIONS.md` A1. It was deliberately not
+built for v1; nothing forecloses adding it.
 
 ## Retention
 
-Facts outlive a single webhook and are the plugin's to expire — defaults and the
-open question about them are in
+Facts outlive a single run and are the plugin's to expire — defaults and how
+they're enforced are in
 [`talooner-plugin/facts.md`](https://github.com/opentalon/talooner-plugin/blob/main/facts.md),
-"Scoping and lifetime". The bot keeps nothing across requests.
+"Scoping and lifetime". The GitHub half keeps nothing — it is a container that
+exits.
+
+One consequence worth stating with the retention rules: a fact asserted from
+outside (your CI POSTing `preview.status`) sits in `talon-db` doing nothing until
+something evaluates. In v1 that something is a human typing `@talooner /review`
+(decision 20). If retention expires the fact before anyone does, the rule that
+wanted it never fires — so retention must outlive a realistic "nobody looked at
+this PR for a few days".

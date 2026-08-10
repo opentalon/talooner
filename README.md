@@ -25,33 +25,73 @@ A repo declares its policy in `.github/talooner/rules.talon`:
 
 ```talon
 define "small_change" {
-  "pr.lines_changed" < 50
-  "pr.files_changed" < 5
+  attr "pr.lines_changed" < 50
+  attr "pr.files_changed" < 5
 }
 
 define "critical_path" {
-  "pr.changed_files" contains "internal/auth/"
-    or "pr.changed_files" contains "billing/"
+  attr "pr.changed_files" contains "internal/auth/"
+    or attr "pr.changed_files" contains "billing/"
 }
 
 rule "Auto-approve safe changes" {
-  when is "small_change"
-    and "pr.tests_passing" == true
-    and "pr.has_description" == true
+  for records where type == "pr"
+    and is "small_change"
+    and attr "pr.tests_passing" == true
+    and attr "pr.has_description" == true
     and not is "critical_path"
+  allow "merge"
   do approve "pr"
 }
 
 rule "Require human review for critical paths" {
-  when is "critical_path"
+  for records where type == "pr"
+    and is "critical_path"
+  requires "review.senior_engineer"
   do require "review.senior_engineer"
-  do assign "pr" "user.owner"
-  do comment "pr" "Touches critical code owned by {user.owner} — human approval required"
+  do assign "pr" attr "user.owner"
+  do comment "pr" "Touches critical code owned by {attr.user.owner} — human approval required"
 }
 ```
 
-A maintainer comments `@talooner /review`. Talooner extracts the facts, runs the
-rules, and reports. Same commit, same rules, same verdict — every time.
+The runnable version of this ruleset, with a passing test suite, is
+[`examples/talooner_review.talon`](https://github.com/opentalon/talon-language/blob/main/examples/talooner_review.talon)
+in `talon-language`.
+
+and wires up the action in `.github/workflows/talooner.yml`:
+
+```yaml
+name: talooner
+on:
+  issue_comment: {types: [created]}
+  pull_request:  {types: [synchronize, reopened, closed]}
+  check_suite:   {types: [completed]}
+
+concurrency:
+  group: talooner-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  review:
+    if: github.event_name != 'issue_comment' || startsWith(github.event.comment.body, '@talooner')
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      checks: write
+      contents: read
+    steps:
+      - uses: opentalon/talooner@v1
+        with:
+          opentalon_host:    ${{ secrets.OPENTALON_HOST }}
+          opentalon_api_key: ${{ secrets.OPENTALON_API_KEY }}
+```
+
+A maintainer comments `@talooner /review`. A runner starts, extracts the facts,
+sends them to your cluster, executes whatever actions come back, and exits. Same
+commit, same rules, same verdict — every time.
+
+Your LLM credentials are not in that workflow and never touch the runner. They
+live in your cluster, which is the only thing that talks to a model.
 
 Because the policy is a file in your repo, it is versioned, diffable, reviewable,
 and unit-testable with `.talon.test` before it ever gates a real PR. That is a
@@ -67,7 +107,7 @@ claim no LLM-based reviewer can make.
 | `actions.md` | Action catalog, GitHub semantics, conflict resolution, App permissions |
 | `auth.md` | Credentials, onboarding CLI, untrusted input, audit |
 | `roadmap.md` | Phases 0–4, and what this drags into the other repos |
-| `OPEN-QUESTIONS.md` | What's still undecided |
+| `OPEN-QUESTIONS.md` | Phase-0 findings and the calls made on them |
 
 The server side is documented in its own repo:
 [`talooner-plugin`](https://github.com/opentalon/talooner-plugin) — protocol,
@@ -78,8 +118,8 @@ engine internals, fact scoping, `llm_review`, cluster deployment. Start with its
 
 | # | Decision |
 |---|---|
-| 1 | **GitHub App**, not a bot user. Per-installation rate limits, per-install scoped tokens, declared permissions. |
-| 2 | **Thin stateless bot + `talooner-plugin` in an OpenTalon cluster.** Bot knows GitHub and nothing about Talon; plugin knows Talon and nothing about GitHub. |
+| 1 | **A GitHub Action, not a hosted App.** Talooner runs inside the reviewed repo's own Actions runner, triggered by native workflow events. No webhook endpoint, no long-running process, no App registration, no shared anything. Identity is `github-actions[bot]`; credentials are the run's `GITHUB_TOKEN` plus two repo secrets. |
+| 2 | **Thin stateless action + `talooner-plugin` in an OpenTalon cluster.** The action knows GitHub and nothing about Talon; the plugin knows Talon and nothing about GitHub. All state is cluster-side, which is what lets the GitHub half be a process that lives for 30 seconds. |
 | 3 | **Self-hosted. Forever.** No hosted tier, ever. You bring a VPS and run the cluster; the cluster holds your LLM credentials; you pay for your own tokens. |
 | 4 | **Advisory, never merges. in v1.** `contents: read`, no `contents: write`. Check runs gate merges only if the repo owner marks them required. |
 | 5 | **Facts live in `talon-db`**, per PR, persistent — required for reactive rules. |
@@ -91,10 +131,13 @@ engine internals, fact scoping, `llm_review`, cluster deployment. Start with its
 | 11 | **No dispatch actions.** `deploy_preview` / `screenshot` / `scan_dependencies` are not verbs. The tenant's CI does the work and POSTs the result to the facts API; rules react. |
 | 12 | **Two repos.** `talooner` (bot + CLI) and `talooner-plugin` (engine, fact store, proto). Separate concepts, separate versions. |
 | 13 | **Config lives in the reviewed repo**, at `.github/talooner/`. Policy is versioned, diffable, and testable like any other code. |
-| 14 | **Explicit invocation in v1** — `@talooner /review`. Nothing happens until asked; the PR is then subscribed to pushes. |
+| 14 | **Explicit invocation in v1** — `@talooner /review`. Nothing happens until asked; the PR is then subscribed to pushes. Doubly load-bearing under decision 1: `issue_comment` runs in base-repo context where the secrets exist, while a fork's `pull_request` event gets none. |
 | 15 | **One evaluation per PR.** `module.*` binds to the primary touched module, not N runs. |
 | 16 | **`user.*` namespace** for code ownership, resolved from CODEOWNERS then `modules.yaml`. Distinct from `pr.author`. |
 | 17 | **Naming.** Talooner is the ecosystem *and* the bot. Bot = `talooner`; everything else = `talooner-*`. |
+| 18 | **`/review` always re-evaluates.** No re-render shortcut: decision 9 already makes re-evaluation at an unchanged sha free, because `llm_review` results are facts keyed by sha. `/review --force` busts that cache — the only command that can spend on a sha already answered. |
+| 19 | **Identity is `github-actions[bot]`.** No App to name, no globally unique name to claim, no name collision between installs. The brand is the action ref `opentalon/talooner@v1`. |
+| 20 | **No reactive wake in v1.** Nothing is alive between events, so a fact POSTed by your CI does not by itself produce a comment. Someone types `@talooner /review` and the next run picks it up. Dispatch- and poll-based wake are phase 4, if ever. |
 
 ## What running this will require
 
@@ -102,13 +145,15 @@ Not a service you sign up for. There is no hosted tier and no plan for one — t
 cluster holds the LLM credentials, so every token a rule spends is billed to
 whoever ran the rule.
 
-1. A VPS running an **OpenTalon cluster**
+1. A VPS running an **OpenTalon cluster**, reachable from GitHub's runners over
+   TLS (or a self-hosted runner, if the cluster stays private)
 2. `talooner-plugin` loaded in that cluster, with `talon-db` available
 3. LLM provider credentials configured **in the cluster**
-4. A GitHub App registered against your org, installed on your repos
-5. The `talooner` bot running, holding the App private key and a cluster API key
+4. `.github/workflows/talooner.yml` in each reviewed repo
+5. Two repo (or org) secrets: `OPENTALON_HOST`, `OPENTALON_API_KEY`
 
-Details in `auth.md`.
+No App to register, no private key to hold, no process to keep up. Items 1–3 are
+the standing cost; 4–5 are a two-minute setup per repo. Details in `auth.md`.
 
 ## Related repos
 
@@ -122,11 +167,13 @@ Details in `auth.md`.
 ## Contributing
 
 Design phase, so the highest-value contribution right now is disagreement.
-`OPEN-QUESTIONS.md` lists what's undecided. The phase-0 substrate questions —
-answerable by reading `talon-language`, and each one blocks implementation — live
-in
-[`talooner-plugin/OPEN-QUESTIONS.md`](https://github.com/opentalon/talooner-plugin/blob/main/OPEN-QUESTIONS.md)
-§A.
+`OPEN-QUESTIONS.md` records what was decided and why — including one accepted
+risk (unset facts read as false, so a failed extraction can approve) that is
+worth arguing with if you think it's wrong. The phase-0 substrate questions are
+answered in
+[`talooner-plugin/OPEN-QUESTIONS.md`](https://github.com/opentalon/talooner-plugin/blob/main/OPEN-QUESTIONS.md);
+three of them turned into upstream fixes, all landed 2026-08-07, so the phase-0
+exit artifact is the next thing to write and nothing is waiting on the substrate.
 
 ## License
 

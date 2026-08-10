@@ -58,10 +58,10 @@ flowchart TB
     DEV(["<b>Maintainer</b><br/>invokes reviews<br/>reads the verdict"])
     CONTRIB(["<b>Contributor</b><br/>opens PRs, incl. from forks<br/><i>cannot invoke Talooner</i>"])
 
-    GH["<b>GitHub</b><br/>repos · PRs · checks · reviews<br/><i>source of events, target of actions</i>"]
+    GH["<b>GitHub</b><br/>repos · PRs · checks · reviews<br/><i>also runs the action</i>"]
 
     subgraph SELF["Your VPS"]
-        TAL["<b>Talooner</b><br/>deterministic PR reviewer<br/><i>rules decide; a model only answers questions</i>"]
+        TAL["<b>Talooner cluster</b><br/>rules · facts · decisions<br/><i>rules decide; a model only answers questions</i>"]
     end
 
     LLM["<b>LLM provider</b><br/>consulted only when a rule<br/>fires llm_review · your account"]
@@ -69,8 +69,8 @@ flowchart TB
 
     DEV -->|"@talooner /review"| GH
     CONTRIB -->|"opens PRs"| GH
-    GH -->|"webhooks"| TAL
-    TAL -->|"reviews · comments<br/>check runs"| GH
+    GH -->|"Actions run:<br/>facts out, actions in"| TAL
+    TAL -->|"reviews · comments<br/>check runs<br/><i>via the runner</i>"| GH
     TAL -->|"llm_review only"| LLM
     CI -->|"POST facts"| TAL
 
@@ -83,87 +83,90 @@ flowchart TB
     style SELF fill:#fbfdff,stroke:#3b6bb5,stroke-width:2px,stroke-dasharray:7 5
 ```
 
-Two things this level exists to make unmissable:
+Three things this level exists to make unmissable:
 
 - **Contributors cannot invoke Talooner.** Only someone with write access can.
   That single arrow removes most of the fork threat model.
 - **Every external arrow costs the VPS owner money, and nobody else.** There is
   no shared service in this picture, by design and permanently.
+- **Talooner's GitHub half runs on GitHub.** It's an Action in the tenant's own
+  repo, not a service listening for webhooks. The VPS holds rules, facts and
+  credentials; it never calls GitHub.
 
 ---
 
 ## 1. Containers — C4 L2
 
-Everything inside the dashed boundary runs on **your** VPS. There is no hosted
-Talooner, no shared service, no third party.
+Two boundaries now: what GitHub runs for you, and what you run. You pay for the
+VPS; GitHub runs the ephemeral half.
 
 ```mermaid
 flowchart TB
     subgraph GH["GitHub — SaaS"]
-        direction LR
-        APP["App installation<br/>webhooks out"]
-        GAPI["REST / GraphQL API"]
+        direction TB
+        EV["Events<br/>issue_comment · pull_request<br/>check_suite"]
+        RUN["<b>Actions runner</b><br/>opentalon/talooner@v1<br/><i>ephemeral, one job per event</i>"]
+        GAPI["REST API"]
         PR["Pull request"]
+        EV -->|"triggers"| RUN
         GAPI --- PR
     end
 
     CI["<b>Your CI</b><br/>preview builds · scans<br/>screenshots"]
 
     subgraph VPS["Your VPS — you own and pay for all of this"]
-        direction TB
-        BOT["<b>talooner</b> — the bot<br/>GitHub App service + CLI<br/><i>stateless</i>"]
-
         subgraph CLUSTER["OpenTalon cluster"]
             direction LR
             PLUGIN["<b>talooner-plugin</b><br/>Talon engine · rulesets<br/>llm_review · explain"]
             DB[("<b>talon-db</b><br/>facts · decisions<br/>subscriptions")]
             PLUGIN <--> DB
         end
-
-        BOT <-->|"gRPC"| PLUGIN
     end
 
     LLM["<b>LLM provider</b><br/>your account, your budget"]
 
-    APP -->|"issue_comment<br/>pull_request<br/>check_suite"| BOT
-    CI -->|"POST /api/v1/facts"| BOT
-    BOT -->|"installation token<br/>reviews · comments<br/>check runs"| GAPI
+    RUN <-->|"gRPC + TLS<br/>OPENTALON_API_KEY"| PLUGIN
+    RUN -->|"GITHUB_TOKEN<br/>reviews · comments<br/>check runs"| GAPI
+    CI -->|"POST /api/v1/facts"| PLUGIN
     PLUGIN -->|"tenant credentials<br/>live only here"| LLM
 
     classDef ext fill:#f4f4f4,stroke:#8a8a8a,stroke-dasharray:5 4,color:#333
     classDef own fill:#e8f0fe,stroke:#3b6bb5,color:#102040
     classDef store fill:#ede7f6,stroke:#6a4fa3,color:#221040
-    class APP,GAPI,PR,LLM,CI ext
-    class BOT,PLUGIN own
+    class EV,GAPI,PR,LLM,CI ext
+    class RUN,PLUGIN own
     class DB store
     style VPS fill:#fbfdff,stroke:#3b6bb5,stroke-width:2px,stroke-dasharray:7 5
     style CLUSTER fill:#f2f8f0,stroke:#4a8f3c
     style GH fill:#fafafa,stroke:#8a8a8a,stroke-dasharray:5 4
 ```
 
-Two things to read off this diagram:
+Three things to read off this diagram:
 
-- **The bot never touches an LLM.** Provider credentials live in the cluster and
-  nowhere else. Compromise the bot, you get GitHub comment access; compromise the
-  cluster, you get LLM spend. Never both.
-- **Preview builds and scans are your CI's job.** Talooner has no dispatch verb
-  for them. Your workflow does the work and POSTs the result as a fact; rules
-  react to that fact.
+- **The runner never touches an LLM.** Provider credentials live in the cluster
+  and nowhere else. Compromise a run, you get one repo's GitHub access for a few
+  minutes; compromise the cluster, you get LLM spend. Never both.
+- **Arrows into the cluster, never out.** The cluster holds no GitHub credential
+  and initiates nothing. That's why an externally POSTed fact can't produce a
+  comment on its own (decision 20).
+- **Preview builds and scans are your CI's job**, and they POST to the cluster
+  directly — there is no bot endpoint to POST to. Talooner has no dispatch verb;
+  your workflow does the work, rules react to the fact.
 
 ---
 
 ## 2. Components — C4 L3
 
-### 2a. `talooner` — knows GitHub, knows nothing about Talon
+### 2a. `talooner` the action — knows GitHub, knows nothing about Talon
 
 ```mermaid
 flowchart TB
-    IN(["webhook from GitHub"]) --> WH
-    WH["Webhook receiver<br/>HMAC verify · 202 fast"] --> CMD
-    CMD["Command parser<br/>/review /stop /why /plan<br/>+ write-access gate"] --> Q
-    Q["Queue<br/>serialized per PR"] --> AUTH
-    AUTH["App auth<br/>JWT → installation token"] --> FACTS
-    FACTS["Fact extractor<br/>diff · checks · CODEOWNERS"] --> OUT
+    IN(["workflow event<br/>GITHUB_EVENT_PATH"]) --> EVT
+    EVT["Event parser<br/>→ repo · pr · trigger"] --> CMD
+    CMD["Command parser<br/>/review [--force] /stop /why /plan<br/>+ write-access gate"] --> SUB
+    SUB{"subscribed?<br/><i>ask the plugin</i>"} -->|"no, and not /review"| SKIP(["exit 0 — skipped job"])
+    SUB -->|"yes"| FACTS
+    FACTS["Fact extractor<br/>diff · checks · CODEOWNERS<br/><i>GITHUB_TOKEN</i>"] --> OUT
 
     OUT(["action evaluate_pr →<br/>talooner-plugin"])
     BACK(["← actions[] + explain"]) --> EXEC
@@ -173,9 +176,13 @@ flowchart TB
 
     classDef bot fill:#e8f0fe,stroke:#3b6bb5,color:#102040
     classDef edge fill:#f4f4f4,stroke:#8a8a8a,color:#333
-    class WH,CMD,Q,AUTH,FACTS,EXEC,EXEC1,EXEC2 bot
-    class IN,OUT,BACK,GH edge
+    class EVT,CMD,SUB,FACTS,EXEC,EXEC1,EXEC2 bot
+    class IN,OUT,BACK,GH,SKIP edge
 ```
+
+Gone from this picture, compared to a webhook service: the HMAC verifier, the
+202-in-10-seconds path, the per-PR queue, and the App auth chain. Concurrency is
+the workflow's `concurrency:` block; auth is a token the runner is handed.
 
 ### 2b. `talooner-plugin` — knows Talon, knows nothing about GitHub
 
@@ -188,7 +195,8 @@ The seam: the plugin returns an **abstract action list**, the bot translates it
 into API calls. Consequences worth stating to the team —
 
 - `talooner-plugin` is testable with zero GitHub fixtures.
-- The bot holds no engine state, so it restarts freely.
+- The action holds no engine state, which is what lets it be a process that
+  exits.
 - `rules plan` is not a separate code path. It's the same evaluation with the
   printer executor swapped in. Build the interface in phase 1 and dry-run is
   nearly free in phase 2.
@@ -204,21 +212,20 @@ sequenceDiagram
     autonumber
     actor Dev as Maintainer
     participant GH as GitHub
-    participant Bot as talooner
+    participant Bot as talooner (runner)
     participant Plug as talooner-plugin
     participant DB as talon-db
 
     Dev->>GH: comment "@talooner /review"
-    GH->>Bot: webhook issue_comment
-    Bot->>Bot: verify X-Hub-Signature-256
-    Bot-->>GH: 202 Accepted
-    Note over Bot: must answer in under 10s —<br/>all real work is async
+    GH->>GH: workflow `if:` — body starts with @talooner?
+    Note over GH: cheap filter — no runner starts<br/>for ordinary comments
+    GH->>Bot: start job, mint GITHUB_TOKEN
+    Note over Bot: fresh container, ~10–30s cold start.<br/>Secrets present: issue_comment runs<br/>in base repo context
 
     Bot->>GH: does commenter have write access?
     alt no write access
-        Bot-->>Dev: ignored — prevents budget burn<br/>by drive-by accounts
+        Bot-->>Dev: exit 0, no writes — prevents budget burn<br/>by drive-by accounts
     else has write access
-        Bot->>GH: mint installation token, 1h TTL
         Bot->>GH: fetch PR, files, checks, CODEOWNERS
         Bot->>GH: fetch .github/talooner/ from BASE branch
         Note over Bot,GH: base branch, never head —<br/>see diagram 6
@@ -232,8 +239,14 @@ sequenceDiagram
         Bot->>GH: check run "talooner" (success/failure/neutral)
         Bot->>GH: sticky comment (marker-keyed, edited in place)
         Bot->>GH: review APPROVE / REQUEST_CHANGES
+        Bot-->>GH: exit 0 — container destroyed
     end
 ```
+
+The write-access check runs **inside** the job, after a runner has already
+started, so an unauthorised comment still costs a few seconds of Actions time.
+That's the price of not having a gatekeeper process; the `if:` filter keeps it to
+comments that at least mention the bot.
 
 ---
 
@@ -247,20 +260,20 @@ sequenceDiagram
     autonumber
     actor Dev as Developer
     participant GH as GitHub
-    participant Bot as talooner
+    participant Bot as talooner (runner)
     participant Plug as talooner-plugin
     participant DB as talon-db
 
     Dev->>GH: git push (new head sha)
-    GH->>Bot: webhook pull_request synchronize
+    GH->>Bot: start job — pull_request synchronize
+    Note over GH,Bot: concurrency group talooner-<pr><br/>queues behind any in-flight run
     Bot->>Plug: action is_subscribed — repo, pr
 
     alt not subscribed
         Plug-->>Bot: no
-        Bot-->>Bot: drop — never reviewed unasked
+        Bot-->>Bot: exit 0 — never reviewed unasked
     else subscribed
         Plug-->>Bot: yes
-        Bot->>Bot: cancel any in-flight run —<br/>its head sha is stale
         Bot->>GH: re-extract ALL facts at new sha
         Note over Bot: full re-derivation, never deltas —<br/>this is what makes retraction work
 
@@ -375,17 +388,25 @@ stateDiagram-v2
     [*] --> Unwatched: PR opened
 
     Unwatched --> Subscribed: "@talooner /review" — write access required
-    Unwatched --> Unwatched: push or check completes — ignored
+    Unwatched --> Unwatched: push or check completes — job exits 0
 
+    Subscribed --> Subscribed: "@talooner /review" — full re-evaluation
+    Subscribed --> Subscribed: "@talooner /review --force" — also busts llm cache
     Subscribed --> Subscribed: push — full re-evaluation
     Subscribed --> Subscribed: check_suite completed — re-evaluate
     Subscribed --> Subscribed: review submitted — review.* facts
-    Subscribed --> Subscribed: CI POSTs custom fact — engine wakes
 
     Subscribed --> Unwatched: "@talooner /stop"
     Subscribed --> Closed: PR closed or merged
 
     Closed --> [*]: facts expire after retention
+
+    note right of Subscribed
+        CI POSTing a fact does NOT appear here.
+        Nothing is running between events, so it
+        lands in talon-db and waits for the next
+        evaluation. Decision 20.
+    end note
 
     note right of Unwatched
         v1 default. Auto-review on PR open
@@ -394,9 +415,9 @@ stateDiagram-v2
     end note
 ```
 
-Subscription is state, and the bot is stateless — so it lives in `talon-db` with
-everything else. A bot restart must not silently stop watching a PR someone asked
-it to watch.
+Subscription is state, and there is no process to hold it — so it lives in
+`talon-db` with everything else. Each run asks the plugin rather than
+remembering.
 
 ---
 
@@ -404,18 +425,18 @@ it to watch.
 
 ```mermaid
 flowchart LR
-    subgraph BOTP["talooner process"]
-        K1["GitHub App private key"]
-        K2["Cluster API key"]
+    subgraph BOTP["Actions runner — lives for one job"]
+        K1["GITHUB_TOKEN<br/><i>minted per run</i>"]
+        K2["OPENTALON_API_KEY<br/><i>from repo/org secret</i>"]
     end
 
     subgraph CLP["OpenTalon cluster"]
         K3["LLM provider credentials"]
     end
 
-    K1 -->|"mints"| IT["Installation token<br/>1h TTL, one install"]
-    IT -->|"can"| CAN["✅ comment · review<br/>check run · assign"]
-    IT -.->|"cannot — permission<br/>never requested"| CANT["❌ merge · push · edit CI<br/>change settings"]
+    K1 -->|"can, per workflow<br/>permissions: block"| CAN["✅ comment · review<br/>check run · assign"]
+    K1 -.->|"cannot — not granted<br/>to the job"| CANT["❌ merge · push · edit CI<br/>change settings"]
+    K1 -.->|"expires"| EXP["job ends → token dead"]
 
     K2 -->|"can"| RPC["gRPC to cluster<br/>evaluate_pr · whoami"]
     K3 -->|"can"| SPEND["LLM spend<br/>your account, your budget"]
@@ -423,18 +444,22 @@ flowchart LR
     classDef no fill:#fdeaea,stroke:#c0392b,color:#611
     classDef yes fill:#eef7ee,stroke:#4a8f3c,color:#161
     class CANT no
-    class CAN,SPEND yes
+    class CAN,SPEND,EXP yes
 ```
 
 | Credential | Held by | If leaked |
 |---|---|---|
-| GitHub App private key | bot | Comment/review as the bot on installed repos. **Cannot merge or push** — the permission isn't requested. Rotate; tokens die within 1h. |
-| Cluster API key | bot | Burn that tenant's LLM budget. Rotate cluster-side. |
-| LLM provider key | cluster only | Full provider account. Never transits the bot, a webhook, `talon-db`, or a log line. |
+| `GITHUB_TOKEN` | runner, one job | Comment/review on that one repo until the job ends. **Cannot merge or push** — not granted. Nothing to rotate. |
+| Cluster API key | runner, from a secret | Burn that tenant's LLM budget. Rotate cluster-side. |
+| LLM provider key | cluster only | Full provider account. Never transits a runner, `talon-db`, or a log line. |
 
-App permissions requested: `pull_requests: write`, `checks: write`,
-`contents: read`, `metadata: read`, `members: read`. Explicitly **not**
-requested: `contents: write`, `administration`, `workflows`.
+Job permissions: `pull-requests: write`, `checks: write`, `contents: read`.
+Everything else — `contents: write`, `actions`, `administration` — is simply not
+granted to the job. Declared in the tenant's workflow file, so widening them is a
+reviewable diff rather than an install dialog.
+
+There is no long-lived GitHub credential in this design. The App private key,
+which was the worst thing on this diagram, no longer exists.
 
 ---
 
@@ -451,7 +476,7 @@ flowchart LR
     PRF --> TOUCH
     REV["pull_request_review<br/>events"] --> REVF["<b>review.*</b>"]
     ENGINE["Talon engine"] --> LLMF["<b>llm_review.*</b><br/>pinned to head_sha"]
-    YOURCI["Your CI<br/>POST /api/v1/facts"] --> CUSTOM["<b>preview.* screenshots.*<br/>dependency_scan.*</b>"]
+    YOURCI["Your CI<br/>POST to the cluster<br/>/api/v1/facts"] --> CUSTOM["<b>preview.* screenshots.*<br/>dependency_scan.*</b><br/><i>read at next evaluation</i>"]
 
     PRF --> STORE[("talon-db<br/>per-PR fact scope")]
     USR --> STORE
@@ -475,9 +500,10 @@ workflow could POST `pr.tests_passing: true` and defeat the entire ruleset.
 
 ### One trap the team must know about
 
-A condition on an **unset** fact evaluates to *unknown*, not false — and
-`not <unknown>` is unknown, not true. Otherwise a PR whose fact extraction failed
-sails through `not is "critical_path"` and gets auto-approved.
+A condition on an **unset** fact evaluates to *false*, not unknown — so
+`not <unset>` is **true**, and a PR whose fact extraction failed sails through
+`not is "critical_path"` and gets auto-approved.
 
-This is a property of `talon-language`'s evaluator, not of Talooner, and it is
-the first thing phase 0 verifies. See `facts.md`, "Unset is not false".
+Phase 0 verified this against `talon-language`'s evaluator and v1 accepts it. The
+asymmetry to hold onto: positive conditions on an unset fact fail closed (the
+rule doesn't fire), negated ones fail open. See `facts.md`, "Unset is false".

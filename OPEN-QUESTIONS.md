@@ -1,111 +1,60 @@
 # Talooner — open questions
 
-Resolved decisions live in `README.md`. What remains.
+Resolved decisions live in `README.md`. What remains, and what needs your call.
 
 ---
 
-## A. Blocking phase 0 — substrate verification
+## A. Phase 0 — substrate verification, closed
 
-Answerable by reading `talon-language` / `talon-db`, not by discussion. Each one
-silently produces wrong reviews if assumed. They all block the plugin rather than
-the bot, so they live in
+Verified against `talon-language` / `talon-db` at 2026-08-06, with runnable
+probes. The three substrate fixes it filed landed 2026-08-07 —
+[`talon-language#158`](https://github.com/opentalon/talon-language/issues/158)
+(list operands), [#159](https://github.com/opentalon/talon-language/issues/159)
+(import shadowing), and
+[`opentalon#325`](https://github.com/opentalon/opentalon/issues/325) (payload
+ceiling) — so **nothing in phase 0 blocks anything any more**. The full findings
+and the decisions they force live in
 [`talooner-plugin/OPEN-QUESTIONS.md`](https://github.com/opentalon/talooner-plugin/blob/main/OPEN-QUESTIONS.md)
-§A — three-valued evaluation, list operands, facts as action arguments,
-interpolation position, cross-ruleset defeasible resolution, external reactive
-wake, `talon-db` at this shape, payload size.
+§A, since they land on the plugin rather than the bot.
 
-The one with a bot-visible consequence: if the evaluator is two-valued, a PR
-whose fact extraction partially failed gets auto-approved by
-`not is "critical_path"`. That changes what "leave the fact unset" means for
-every extractor in `internal/facts`. Hard blocker. See `facts.md`, "Unset is not
-false".
+**The one with a bot-visible consequence landed on the bad side.** The evaluator
+is two-valued with closed-world negation-as-failure: an unset fact makes its
+pattern fail, which makes the enclosing `not` succeed. Probed directly — a PR
+with `critical_path` unset matched `not is "critical_path"` and was allowed. A PR
+whose extraction partially failed gets auto-approved.
+
+**Decision: accepted for v1.** Missing facts approve rather than block. The
+residual risk is knowingly taken — a PR whose extraction died is approved with a
+review comment reporting no problems.
+
+That still settles what "leave the fact unset" means for every extractor in
+`internal/facts`: it means *false*, not *unknown*, so unset is never a way to say
+"couldn't determine". Extractors assert their facts explicitly, negative cases
+included.
+
+`facts.md` has been rewritten accordingly — the section is now "Unset is false,
+and that asymmetry is load-bearing", and it is required reading before writing
+any rule that grants something.
+
+One bot-visible consequence of the #158 fix, in `facts.md` too: list predicates
+quantify, but `matches` is a substring scan rather than a glob, so path
+predicates are written with `contains` / `starts_with` / `ends_with`.
 
 ---
 
 ## B. Still needing your call
 
-**B1. Licensing.** Recommendation and reasoning in the section below. Needs a
-yes/no from you.
+**B4. Team membership without an App.** `review.<team>.approved` needs org team
+membership, which a repo-scoped `GITHUB_TOKEN` cannot read (decision 1). Two ways
+out: derive team approval from CODEOWNERS review requests — no extra permission,
+covers the common case, slightly wrong for teams not in CODEOWNERS — or accept an
+optional PAT secret for orgs that need real resolution. The default must work
+with no extra secret. Not blocking until `review.*` lands in phase 2. See
+`actions.md`, "Workflow permissions".
 
-**B2. Does `@talooner /review` re-evaluate, or only subscribe?** If a PR is
-already subscribed and someone comments `/review` again — full re-evaluation
-including a fresh `llm_review` at the same sha (costs money, bypasses the fact
-cache), or a no-op that re-renders the existing verdict? Leaning re-render, with
-`/review --force` for the expensive path.
-
-**B3. Bot identity on GitHub.** The App's display name is what appears on every
-review. `talooner[bot]` follows convention. Confirm, and confirm the org that
-owns the App listing if you ever publish it to the Marketplace (listing is free
-and doesn't imply a hosted service).
-
-Two questions that used to sit here — where subscription state lives, and
-retention defaults — are cluster-side and moved to
-[`talooner-plugin/OPEN-QUESTIONS.md`](https://github.com/opentalon/talooner-plugin/blob/main/OPEN-QUESTIONS.md)
-§B. B2 above still needs an answer from both sides: whether `--force` exists is a
-command-surface decision here, and a cache-bypass argument on `evaluate_pr`
-there.
-
----
-
-## C. Deferred to the phase that needs them
-
-- Org-level shared rulesets and non-overridable org policy (phase 4)
-- Auto-review on PR open, opt-in per repo (phase 4)
-- Community ruleset distribution and versioning (phase 4)
-- `k8s-operator` support for `talooner-plugin` in the CRD (phase 4)
-- Merge rights — explicitly out of scope for v1, revisit only with a concrete
-  reason and a permissions re-consent plan
-
----
-
-## Licensing — recommendation
-
-**Apache-2.0 on both `talooner` and `talooner-plugin`.**
-
-Current state of the workspace: `opentalon`, `talon-language`, `talon-db`, and
-`opentalon-agents` are Apache-2.0. `opentalon-workflows` has no LICENSE file at
-all, which makes it proprietary by default — that's the existing "paid plugin"
-pattern.
-
-Why Apache and not that pattern here:
-
-1. **There's nothing to sell.** The usual open-core monetisation is a hosted
-   tier. You've ruled that out permanently. What's left is selling a self-hosted
-   binary licence — which means a licence server, entitlement checks, piracy you
-   can't police, and support obligations, for a product with no users yet. The
-   revenue would not cover the machinery.
-
-2. **The stated goal is adoption, not revenue.** "Battle-test OpenTalon" and
-   "give something to the open-source world" both want the widest possible
-   installed base. Every licence restriction subtracts from that, and you're
-   already asking users to provision a VPS — that's a steep enough ask without
-   also asking them to pay or to accept a non-OSI licence.
-
-3. **Fencing the plugin is the worst version of open-core here.** The plugin is
-   where the OpenTalon dogfooding happens. Closing it means the interesting
-   half — the part that proves `talon-language` works on a real workload — is
-   the part nobody can read, learn from, or contribute to. That defeats the
-   entire reason for building Talooner.
-
-4. **Apache-2.0 specifically, not MIT**, because of the patent grant and the
-   trademark clause. Both matter for a tool corporations install into their
-   review pipeline, and it matches the rest of the workspace so there's no
-   licence-compatibility question when the plugin links `talon-language`.
-
-If you want a monetisation path later, the ones that don't require changing this
-licence: paid support/SLA, a hosted **OpenTalon cluster** (not Talooner — the
-cluster is the thing that's genuinely annoying to operate and the thing people
-would actually pay to avoid), or paid `talooner-*` ecosystem components that are
-genuinely optional. The bot and the plugin should be free either way; they're the
-demo.
-
-The one licence worth considering instead is **BSL 1.1** — source-available,
-free to self-host, converts to Apache after four years, forbids offering it as a
-competing hosted service. It costs you nothing today and blocks someone else
-from building the SaaS you declined to build. The cost is that "source-available"
-reads as not-open-source to a lot of people, and the corporate legal review that
-Apache passes silently becomes a conversation. Given that adoption is the goal
-and there's no revenue to protect, that trade isn't worth it.
-
-**Recommendation: Apache-2.0, both repos. If you want the SaaS clause, BSL 1.1
-on `talooner-plugin` only — but I'd skip it.**
+**B5. Cluster exposure default.** Public gRPC + TLS + API key is the documented
+default; a self-hosted runner is the answer for tenants who won't expose the
+cluster. Fine as a documented choice, but if the honest recommendation for
+private repos turns out to be "run your own runner", that's a heavier onboarding
+story than the README currently admits. Revisit after the first real deployment.
+See `auth.md`, "Cluster auth".
