@@ -3,8 +3,8 @@ package action
 import "fmt"
 
 // assignSpec is `do assign "pr" <team-or-user>`: an assignee through the Issues
-// API, removed again when the rule stops matching (actions.md). D5 owns the
-// write and the withdrawal.
+// API, removed again when the rule stops matching (actions.md). The write and
+// the withdrawal are internal/assignment; this is the argument check.
 //
 // The assignee arrives resolved — `attr "user.owner"` reaches here as @alice,
 // never as the string user.owner. An empty assignee therefore means the fact it

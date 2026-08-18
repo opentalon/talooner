@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -22,6 +23,7 @@ import (
 	"github.com/opentalon/talooner-plugin/proto/taloonerpb"
 
 	"github.com/opentalon/talooner/internal/action"
+	"github.com/opentalon/talooner/internal/assignment"
 	"github.com/opentalon/talooner/internal/check"
 	"github.com/opentalon/talooner/internal/cluster"
 	"github.com/opentalon/talooner/internal/command"
@@ -153,6 +155,22 @@ type fakeGitHub struct {
 	reviews     []submittedReview
 	dismissed   []string // the ids of the reviews this run retracted
 	reviewFails bool     // true to fail the review submit
+	// assignees and requested are what the PR carries when the run starts.
+	assignees      []string
+	requestedUsers []string
+	requestedTeams []string
+	// ignored is the logins GitHub accepts and then leaves out, i.e. the ones
+	// with no write access to the repo.
+	ignored        []string
+	assigneeWrites []peopleWrite
+	reviewerWrites []peopleWrite
+}
+
+// peopleWrite is one assignee or review-request write as it reached GitHub.
+type peopleWrite struct {
+	method string
+	Users  []string `json:"assignees"`
+	Teams  []string `json:"team_reviewers"`
 }
 
 // existingReview is a review already on the PR when the run starts.
@@ -293,6 +311,54 @@ func (g *fakeGitHub) client(t *testing.T) *github.Client {
 			g.mu.Unlock()
 			_, _ = fmt.Fprint(w, `{"id":777}`)
 
+		case strings.HasSuffix(r.URL.Path, "/assignees"):
+			var got peopleWrite
+			if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+				t.Errorf("decode assignees: %v", err)
+			}
+			got.method = r.Method
+			g.mu.Lock()
+			if r.Method == http.MethodPost {
+				for _, login := range got.Users {
+					if !slices.Contains(g.ignored, login) {
+						g.assignees = append(g.assignees, login)
+					}
+				}
+			} else {
+				g.assignees = slices.DeleteFunc(g.assignees, func(login string) bool {
+					return slices.Contains(got.Users, login)
+				})
+			}
+			g.assigneeWrites = append(g.assigneeWrites, got)
+			body := assigneesJSON(g.assignees)
+			g.mu.Unlock()
+			_, _ = fmt.Fprint(w, body)
+
+		case strings.HasSuffix(r.URL.Path, "/requested_reviewers"):
+			var got struct {
+				Users []string `json:"reviewers"`
+				Teams []string `json:"team_reviewers"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+				t.Errorf("decode review requests: %v", err)
+			}
+			g.mu.Lock()
+			if r.Method == http.MethodPost {
+				g.requestedUsers = append(g.requestedUsers, got.Users...)
+				g.requestedTeams = append(g.requestedTeams, got.Teams...)
+			} else {
+				g.requestedUsers = slices.DeleteFunc(g.requestedUsers, func(l string) bool {
+					return slices.Contains(got.Users, l)
+				})
+				g.requestedTeams = slices.DeleteFunc(g.requestedTeams, func(s string) bool {
+					return slices.Contains(got.Teams, s)
+				})
+			}
+			g.reviewerWrites = append(g.reviewerWrites, peopleWrite{method: r.Method, Users: got.Users, Teams: got.Teams})
+			body := reviewersJSON(g.requestedUsers, g.requestedTeams)
+			g.mu.Unlock()
+			_, _ = fmt.Fprint(w, body)
+
 		case strings.HasSuffix(r.URL.Path, "/permission"):
 			_, _ = fmt.Fprintf(w, `{"permission":%q}`, g.permission)
 
@@ -319,14 +385,18 @@ func (g *fakeGitHub) client(t *testing.T) *github.Client {
 				_, _ = fmt.Fprint(w, `{"message":"boom"}`)
 				return
 			}
+			g.mu.Lock()
+			assignees, users, teams := loginsJSON(g.assignees), loginsJSON(g.requestedUsers), slugsJSON(g.requestedTeams)
+			g.mu.Unlock()
 			_, _ = fmt.Fprintf(w, `{
 				"number": 42,
 				"head": {"sha": %q, "ref": "feat/x", "repo": {"full_name": "opentalon/talooner"}},
 				"base": {"sha": "def456", "ref": "master", "repo": {"full_name": "opentalon/talooner"}},
 				"user": {"login": "evgeny"},
 				"title": "Add a thing", "body": "", "state": "open",
-				"additions": 10, "deletions": 3, "changed_files": 1, "commits": 2
-			}`, g.headSHA)
+				"additions": 10, "deletions": 3, "changed_files": 1, "commits": 2,
+				"assignees": %s, "requested_reviewers": %s, "requested_teams": %s
+			}`, g.headSHA, assignees, users, teams)
 		}
 	}))
 	t.Cleanup(srv.Close)
@@ -1094,6 +1164,32 @@ func (g *fakeGitHub) verdict(t *testing.T) submittedReview {
 }
 
 // standingApproval is what a previous run's approve left on the PR.
+// loginsJSON, slugsJSON, assigneesJSON and reviewersJSON are the shapes GitHub
+// returns for people: logins for users, slugs for teams.
+func loginsJSON(logins []string) string {
+	parts := make([]string, 0, len(logins))
+	for _, l := range logins {
+		parts = append(parts, fmt.Sprintf(`{"login":%q}`, l))
+	}
+	return "[" + strings.Join(parts, ",") + "]"
+}
+
+func slugsJSON(slugs []string) string {
+	parts := make([]string, 0, len(slugs))
+	for _, s := range slugs {
+		parts = append(parts, fmt.Sprintf(`{"slug":%q}`, s))
+	}
+	return "[" + strings.Join(parts, ",") + "]"
+}
+
+func assigneesJSON(logins []string) string {
+	return `{"assignees":` + loginsJSON(logins) + `}`
+}
+
+func reviewersJSON(users, teams []string) string {
+	return `{"requested_reviewers":` + loginsJSON(users) + `,"requested_teams":` + slugsJSON(teams) + `}`
+}
+
 func standingApproval() []existingReview {
 	return []existingReview{{ID: 12, Body: review.Marker() + "\napproved", State: github.StateApproved}}
 }
@@ -1163,13 +1259,13 @@ func TestNoVerdictRetractsTheStandingReview(t *testing.T) {
 	}
 }
 
-// A verb nothing here performs — assign until D5, notify until D6 — fails the
-// run before any of the verdict is published. Half a verdict on the PR is worse
-// than none, and an action silently skipped is the failure nobody notices.
+// A verb nothing here performs — notify until D6 — fails the run before any of
+// the verdict is published. Half a verdict on the PR is worse than none, and an
+// action silently skipped is the failure nobody notices.
 func TestAVerbWithNoExecutorFailsBeforeAnythingIsWritten(t *testing.T) {
 	f := &fakeCluster{answers: evaluated(
 		&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_APPROVE, Target: "pr"},
-		&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_ASSIGN, Target: "pr", Assignee: "alice"},
+		&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_NOTIFY, Target: "slack.security", Text: "look at this"},
 	)}
 	gh := &fakeGitHub{}
 
@@ -1198,6 +1294,101 @@ func TestAFailedReviewLeavesTheCheckNeutral(t *testing.T) {
 
 	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err == nil {
 		t.Fatal("Run = nil, want the review failure")
+	}
+	if got := gh.check(t).Conclusion; got != github.ConclusionNeutral {
+		t.Errorf("conclusion = %q, want neutral", got)
+	}
+}
+
+// The assign and require verbs reach GitHub, and what they added is
+// recorded so a later run can take it back.
+func TestAssignAndRequireAreWrittenAndRecorded(t *testing.T) {
+	f := &fakeCluster{answers: evaluated(
+		&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_ASSIGN, Target: "pr", Assignee: "alice"},
+		&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_REQUIRE, Target: "review.security"},
+	)}
+	gh := &fakeGitHub{}
+
+	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !slices.Contains(gh.assignees, "alice") {
+		t.Errorf("assignees = %v, want alice", gh.assignees)
+	}
+	if !slices.Contains(gh.requestedTeams, "security") {
+		t.Errorf("requested teams = %v, want security", gh.requestedTeams)
+	}
+
+	var ledger string
+	for _, c := range gh.comments {
+		if strings.Contains(c.Body, comment.Marker(comment.TopicState)) {
+			ledger = c.Body
+		}
+	}
+	if ledger == "" {
+		t.Fatalf("no ledger comment was written: %+v", gh.comments)
+	}
+	got, err := assignment.ParseLedger(ledger)
+	if err != nil {
+		t.Fatalf("ParseLedger: %v", err)
+	}
+	if len(got.Assignees) != 1 || got.Assignees[0] != "alice" || len(got.Teams) != 1 || got.Teams[0] != "security" {
+		t.Errorf("ledger = %+v, want what this run added", got)
+	}
+}
+
+// Retraction is the absence of an action here too: the rules stopped asking,
+// and the assignee has to come off — but only the one Talooner added.
+func TestNoActionsRetractsOnlyTaloonersOwnAssignees(t *testing.T) {
+	ledger := assignment.LedgerBody(assignment.Ledger{Assignees: []string{"alice"}})
+	f := &fakeCluster{answers: evaluated(&taloonerpb.Action{
+		Verb: taloonerpb.Verb_VERB_COMMENT, Target: "pr", Text: "describe your change",
+	})}
+	gh := &fakeGitHub{
+		assignees: []string{"alice", "carol"},
+		existing:  []existingComment{{ID: 77, Body: comment.Marker(comment.TopicState) + "\n" + ledger}},
+	}
+
+	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if want := []string{"carol"}; !slices.Equal(gh.assignees, want) {
+		t.Errorf("assignees = %v, want %v: carol was assigned by a person", gh.assignees, want)
+	}
+}
+
+// An assignee GitHub silently drops fails the run, and the check run says
+// neutral rather than success: Talooner did not do what it reported doing.
+func TestAnIgnoredAssigneeLeavesTheCheckNeutral(t *testing.T) {
+	f := &fakeCluster{answers: evaluated(&taloonerpb.Action{
+		Verb: taloonerpb.Verb_VERB_ASSIGN, Target: "pr", Assignee: "stranger",
+	})}
+	gh := &fakeGitHub{ignored: []string{"stranger"}}
+
+	err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)})
+	if !errors.Is(err, assignment.ErrIgnored) {
+		t.Fatalf("err = %v, want ErrIgnored", err)
+	}
+	if got := gh.check(t).Conclusion; got != github.ConclusionNeutral {
+		t.Errorf("conclusion = %q, want neutral", got)
+	}
+}
+
+// A require target nothing maps to fails before any part of the verdict is
+// published — the same guarantee a missing executor has.
+func TestAnUnmappedRequireTargetFailsBeforeAnythingIsWritten(t *testing.T) {
+	f := &fakeCluster{answers: evaluated(
+		&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_APPROVE, Target: "pr"},
+		&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_REQUIRE, Target: "review.foo.bar"},
+	)}
+	gh := &fakeGitHub{}
+
+	err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)})
+	if !errors.Is(err, assignment.ErrTarget) {
+		t.Fatalf("err = %v, want ErrTarget", err)
+	}
+	if len(gh.reviews) != 0 || len(gh.comments) != 0 {
+		t.Errorf("published part of the verdict: reviews %+v, comments %+v", gh.reviews, gh.comments)
 	}
 	if got := gh.check(t).Conclusion; got != github.ConclusionNeutral {
 		t.Errorf("conclusion = %q, want neutral", got)

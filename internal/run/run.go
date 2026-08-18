@@ -5,9 +5,9 @@
 // load the ruleset from the base branch → extract facts → evaluate_pr → report
 // — with the pieces the later tickets own left as one log line each. What is
 // written back to GitHub so far is the talooner check run, the sticky review
-// comment and the approve/block review; the assignments and review requests are
-// D5, the notifications D6, the full .github/talooner loader E1, and fork plan
-// mode E2.
+// comment, the approve/block review, and the assignees and review requests; the
+// notifications are D6, the full .github/talooner loader E1, and fork plan mode
+// E2.
 //
 // Once a run knows the head sha it owes that sha a check run, including when it
 // breaks. A failure of Talooner's own is written as neutral, never failure: a
@@ -37,6 +37,7 @@ import (
 	"github.com/opentalon/talooner-plugin/proto/taloonerpb"
 
 	"github.com/opentalon/talooner/internal/action"
+	"github.com/opentalon/talooner/internal/assignment"
 	"github.com/opentalon/talooner/internal/check"
 	"github.com/opentalon/talooner/internal/cluster"
 	"github.com/opentalon/talooner/internal/command"
@@ -236,10 +237,9 @@ func (r Runner) gate(ctx context.Context) (*command.Command, error) {
 	return cmd, nil
 }
 
-// report writes the decision as the sticky review comment and the talooner
-// check run — the human-readable half and the machine-readable one. The rest of
-// the verdict — the GitHub review, the assignees, the review requests — is D4
-// onwards.
+// report writes the decision: the sticky review comment, the actions
+// themselves, and the talooner check run. The one part still missing is notify,
+// which is D6.
 //
 // The action set is decoded before anything is written, so a verdict carrying a
 // verb this build has never heard of fails the run instead of being written as
@@ -264,15 +264,25 @@ func (r Runner) report(ctx context.Context, repo string, pr *github.PullRequest,
 	}
 
 	// The registry is built and checked before anything is written. A verdict
-	// carrying a verb nothing here performs — assign and require until D5,
-	// notify until D6 — fails the run rather than being carried out in part: an
-	// action with no executor is a hard error and never a no-op (actions.md),
-	// and half a verdict published is the one outcome worse than none.
+	// carrying a verb nothing here performs — notify until D6 — fails the run
+	// rather than being carried out in part: an action with no executor is a hard
+	// error and never a no-op (actions.md), and half a verdict published is the
+	// one outcome worse than none.
+	//
+	// Building the assignment syncer resolves every assign and require argument,
+	// so a ruleset naming a team that maps to nobody fails here, before the
+	// sticky comment goes out, rather than halfway through the writes.
 	rev := review.New(r.GitHub, r.Event.Owner, r.Event.Repo, r.Event.PR,
 		pr.HeadSHA, review.Verdict(actions), r.Log)
+	asg, err := assignment.New(r.GitHub, r.Event.Owner, r.Event.Repo, r.Event.PR, pr, actions, r.Log)
+	if err != nil {
+		return fmt.Errorf("cannot carry out the decision for %s#%d: %w", repo, r.Event.PR, err)
+	}
 	registry := action.Registry{
 		action.VerbApprove: rev,
 		action.VerbBlock:   rev,
+		action.VerbAssign:  asg,
+		action.VerbRequire: asg,
 		action.VerbComment: action.Derived("written as the sticky review comment from the whole action set"),
 		action.VerbEmit:    action.Derived("asserted plugin-side; emit has no GitHub effect"),
 	}
@@ -300,10 +310,16 @@ func (r Runner) report(ctx context.Context, repo string, pr *github.PullRequest,
 	if err := rev.Sync(ctx); err != nil {
 		return err
 	}
+	// Same shape, and for the same reason: a decision with no assign and no
+	// require in it has to take back the assignees and review requests the last
+	// one added, and there is no action to hang that on.
+	if err := asg.Sync(ctx); err != nil {
+		return fmt.Errorf("sync the assignments for %s#%d: %w", repo, r.Event.PR, err)
+	}
 
 	// The check run is derived from the whole action set rather than performed
 	// by one verb's executor: it is one value for the decision, and it is
-	// written even for a verb whose GitHub half is not built yet (D5–D6). The
+	// written even for a verb whose GitHub half is not built yet (notify, D6). The
 	// review comment is the same shape of thing — `do comment` firing three
 	// times is one comment with three findings, not three comments. It goes
 	// last, as the run's "everything worked" marker.

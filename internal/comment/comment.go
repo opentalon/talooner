@@ -45,6 +45,12 @@ const (
 	// comment. It is a topic all the same: it is how the next run finds the
 	// review it left, so it has to be spelled the way every other marker is.
 	TopicVerdict = "verdict"
+	// TopicState is the assignment ledger: the assignees and review requests
+	// Talooner itself added, so a later run can take back its own and only its
+	// own. GitHub reports an assignee a human added and one Talooner added
+	// identically, so without this comment there is no way to retract one
+	// without also taking away somebody's deliberate act.
+	TopicState = "state"
 )
 
 // Marker is the HTML comment identifying a topic. It is what makes a comment

@@ -30,6 +30,12 @@ type PullRequest struct {
 	ChangedFiles int
 	Commits      int
 	Labels       []string
+	// Assignees and Requested are the state internal/assignment reconciles
+	// against: who is assigned, and which review requests are standing. They come
+	// from this same GET rather than from calls of their own, so a run reads them
+	// once and cannot reconcile against a state that moved in between.
+	Assignees []string
+	Requested Reviewers
 }
 
 type pullRequestPayload struct {
@@ -63,6 +69,8 @@ type pullRequestPayload struct {
 	Labels       []struct {
 		Name string `json:"name"`
 	} `json:"labels"`
+	assigneesPayload
+	reviewersPayload
 }
 
 // PullRequest fetches one PR.
@@ -98,6 +106,8 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, number int
 		Deletions:    p.Deletions,
 		ChangedFiles: p.ChangedFiles,
 		Commits:      p.Commits,
+		Assignees:    p.logins(),
+		Requested:    p.reviewers(),
 	}
 	if pr.Number == 0 {
 		pr.Number = number
