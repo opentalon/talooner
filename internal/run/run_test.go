@@ -28,6 +28,7 @@ import (
 	"github.com/opentalon/talooner/internal/comment"
 	"github.com/opentalon/talooner/internal/event"
 	"github.com/opentalon/talooner/internal/github"
+	"github.com/opentalon/talooner/internal/review"
 )
 
 const (
@@ -146,6 +147,26 @@ type fakeGitHub struct {
 	// humans left on the PR.
 	existing     []existingComment
 	commentFails bool // true to fail every comment write
+	// standing is what the reviews listing returns: what earlier runs left, and
+	// what humans left alongside them.
+	standing    []existingReview
+	reviews     []submittedReview
+	dismissed   []string // the ids of the reviews this run retracted
+	reviewFails bool     // true to fail the review submit
+}
+
+// existingReview is a review already on the PR when the run starts.
+type existingReview struct {
+	ID    int64  `json:"id"`
+	Body  string `json:"body"`
+	State string `json:"state"`
+}
+
+// submittedReview is one review submit as it reached GitHub.
+type submittedReview struct {
+	CommitID string `json:"commit_id"`
+	Body     string `json:"body"`
+	Event    string `json:"event"`
 }
 
 // existingComment is a comment already on the PR when the run starts.
@@ -242,6 +263,35 @@ func (g *fakeGitHub) client(t *testing.T) *github.Client {
 			g.comments = append(g.comments, got)
 			g.mu.Unlock()
 			_, _ = fmt.Fprint(w, `{"id":555}`)
+
+		case strings.HasSuffix(r.URL.Path, "/reviews") && r.Method == http.MethodGet:
+			raw, err := json.Marshal(g.standing)
+			if err != nil {
+				t.Errorf("encode standing reviews: %v", err)
+			}
+			_, _ = w.Write(raw)
+
+		case strings.HasSuffix(r.URL.Path, "/dismissals"):
+			parts := strings.Split(r.URL.Path, "/")
+			g.mu.Lock()
+			g.dismissed = append(g.dismissed, parts[len(parts)-2])
+			g.mu.Unlock()
+			_, _ = fmt.Fprint(w, `{}`)
+
+		case strings.HasSuffix(r.URL.Path, "/reviews"):
+			if g.reviewFails {
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = fmt.Fprint(w, `{"message":"resource not accessible by integration"}`)
+				return
+			}
+			var got submittedReview
+			if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+				t.Errorf("decode review: %v", err)
+			}
+			g.mu.Lock()
+			g.reviews = append(g.reviews, got)
+			g.mu.Unlock()
+			_, _ = fmt.Fprint(w, `{"id":777}`)
 
 		case strings.HasSuffix(r.URL.Path, "/permission"):
 			_, _ = fmt.Fprintf(w, `{"permission":%q}`, g.permission)
@@ -1025,5 +1075,131 @@ func TestAFailedCommentLeavesTheCheckNeutral(t *testing.T) {
 	if got.Conclusion != github.ConclusionNeutral {
 		t.Errorf("conclusion = %q, want %q: a half-written verdict must not read as approved",
 			got.Conclusion, github.ConclusionNeutral)
+	}
+	if len(gh.reviews) != 0 {
+		t.Errorf("submitted %+v after the comment write failed", gh.reviews)
+	}
+}
+
+// verdict returns the one review the run submitted, failing the test if it
+// submitted none or more than one.
+func (g *fakeGitHub) verdict(t *testing.T) submittedReview {
+	t.Helper()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.reviews) != 1 {
+		t.Fatalf("reviews submitted = %d, want exactly 1: %+v", len(g.reviews), g.reviews)
+	}
+	return g.reviews[0]
+}
+
+// standingApproval is what a previous run's approve left on the PR.
+func standingApproval() []existingReview {
+	return []existingReview{{ID: 12, Body: review.Marker() + "\napproved", State: github.StateApproved}}
+}
+
+func TestApproveSubmitsAReview(t *testing.T) {
+	f := &fakeCluster{answers: evaluated(&taloonerpb.Action{
+		Verb: taloonerpb.Verb_VERB_APPROVE, Target: "pr",
+	})}
+	gh := &fakeGitHub{}
+
+	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	got := gh.verdict(t)
+	if got.Event != github.ReviewApprove {
+		t.Errorf("event = %q, want APPROVE", got.Event)
+	}
+	if got.CommitID != "abc123" {
+		t.Errorf("commit id = %q, want the head sha the verdict was computed from", got.CommitID)
+	}
+	if !strings.Contains(got.Body, review.Marker()) {
+		t.Errorf("body does not carry the marker, so the next run cannot dismiss it: %q", got.Body)
+	}
+	if len(gh.dismissed) != 0 {
+		t.Errorf("dismissed %v with nothing standing", gh.dismissed)
+	}
+}
+
+// The headline of #18: a PR that was approved and has since grown has its
+// approval dismissed, not left standing next to the new request for changes.
+func TestBlockDismissesTheEarlierApproval(t *testing.T) {
+	f := &fakeCluster{answers: evaluated(&taloonerpb.Action{
+		Verb: taloonerpb.Verb_VERB_BLOCK, Target: "pr.merge",
+	})}
+	gh := &fakeGitHub{standing: standingApproval()}
+
+	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := gh.verdict(t).Event; got != github.ReviewRequestChanges {
+		t.Errorf("event = %q, want REQUEST_CHANGES", got)
+	}
+	if len(gh.dismissed) != 1 || gh.dismissed[0] != "12" {
+		t.Errorf("dismissed = %v, want the earlier approval", gh.dismissed)
+	}
+	if got := gh.check(t).Conclusion; got != github.ConclusionFailure {
+		t.Errorf("conclusion = %q, want the check run to agree with the review", got)
+	}
+}
+
+// Retraction is the absence of an action, so no executor is ever handed it: the
+// rules stopped approving, and the approval has to come down anyway.
+func TestNoVerdictRetractsTheStandingReview(t *testing.T) {
+	f := &fakeCluster{answers: evaluated(&taloonerpb.Action{
+		Verb: taloonerpb.Verb_VERB_COMMENT, Target: "pr", Text: "describe your change",
+	})}
+	gh := &fakeGitHub{standing: standingApproval()}
+
+	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(gh.reviews) != 0 {
+		t.Errorf("submitted %+v with no approve or block in the decision", gh.reviews)
+	}
+	if len(gh.dismissed) != 1 || gh.dismissed[0] != "12" {
+		t.Errorf("dismissed = %v, want the approval that no longer holds", gh.dismissed)
+	}
+}
+
+// A verb nothing here performs — assign until D5, notify until D6 — fails the
+// run before any of the verdict is published. Half a verdict on the PR is worse
+// than none, and an action silently skipped is the failure nobody notices.
+func TestAVerbWithNoExecutorFailsBeforeAnythingIsWritten(t *testing.T) {
+	f := &fakeCluster{answers: evaluated(
+		&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_APPROVE, Target: "pr"},
+		&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_ASSIGN, Target: "pr", Assignee: "alice"},
+	)}
+	gh := &fakeGitHub{}
+
+	err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)})
+	if err == nil {
+		t.Fatal("Run = nil, want the missing executor to fail the run")
+	}
+	if !errors.Is(err, action.ErrNoExecutor) {
+		t.Errorf("err = %v, want ErrNoExecutor", err)
+	}
+	if len(gh.reviews) != 0 || len(gh.comments) != 0 {
+		t.Errorf("published part of the verdict: reviews %+v, comments %+v", gh.reviews, gh.comments)
+	}
+	if got := gh.check(t).Conclusion; got != github.ConclusionNeutral {
+		t.Errorf("conclusion = %q, want neutral: this is Talooner's own gap, not a policy outcome", got)
+	}
+}
+
+// The review is written before the check run, so a review that cannot be
+// submitted leaves the neutral check rather than a success nothing backs up.
+func TestAFailedReviewLeavesTheCheckNeutral(t *testing.T) {
+	f := &fakeCluster{answers: evaluated(&taloonerpb.Action{
+		Verb: taloonerpb.Verb_VERB_APPROVE, Target: "pr",
+	})}
+	gh := &fakeGitHub{reviewFails: true}
+
+	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err == nil {
+		t.Fatal("Run = nil, want the review failure")
+	}
+	if got := gh.check(t).Conclusion; got != github.ConclusionNeutral {
+		t.Errorf("conclusion = %q, want neutral", got)
 	}
 }
