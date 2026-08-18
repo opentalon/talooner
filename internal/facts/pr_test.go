@@ -18,6 +18,9 @@ type fakeSource struct {
 	fileErr  error
 	checks   github.Checks
 	checkErr error
+	diff     string
+	trunc    bool
+	diffErr  error
 }
 
 func (f fakeSource) ResolveMergeable(_ context.Context, _, _ string, _ int) (*github.PullRequest, error) {
@@ -30,6 +33,10 @@ func (f fakeSource) ChangedFiles(_ context.Context, _, _ string, _ int) ([]strin
 
 func (f fakeSource) CommitChecks(_ context.Context, _, _, _ string) (github.Checks, error) {
 	return f.checks, f.checkErr
+}
+
+func (f fakeSource) Diff(_ context.Context, _, _ string, _, _ int) (string, bool, error) {
+	return f.diff, f.trunc, f.diffErr
 }
 
 func samplePR() *github.PullRequest {
@@ -51,7 +58,7 @@ func samplePR() *github.PullRequest {
 }
 
 func TestPRAssertsEveryCoreFact(t *testing.T) {
-	src := fakeSource{pr: samplePR(), files: []string{"internal/auth/token.go", "README.md"}}
+	src := fakeSource{pr: samplePR(), files: []string{"internal/auth/token.go", "README.md"}, diff: "@@ -1 +1 @@\n+hello", trunc: false}
 
 	got, err := PR(context.Background(), src, "opentalon", "talooner", 42)
 	if err != nil {
@@ -73,6 +80,8 @@ func TestPRAssertsEveryCoreFact(t *testing.T) {
 		"pr.deletions":       3,
 		"pr.files_changed":   2,
 		"pr.commits":         4,
+		"pr.diff":            "@@ -1 +1 @@\n+hello",
+		"pr.diff_truncated":  false,
 	}
 	for name, v := range want {
 		if got[name] != v {
@@ -93,7 +102,8 @@ func TestPRAssertsEveryCoreFact(t *testing.T) {
 	// the count is pinned rather than left to the loop above. checks_pending is
 	// always asserted (false here: an empty CI is a settled CI); mergeable is
 	// not, because samplePR has none and it is the one fact that may legitimately
-	// be omitted (pr_mergeable test below).
+	// be omitted (pr_mergeable test below). pr.diff and pr.diff_truncated are
+	// always asserted too.
 	if len(got) != len(want)+3 {
 		t.Errorf("asserted %d facts, want %d", len(got), len(want)+3)
 	}
@@ -196,6 +206,7 @@ func TestPRReturnsNoPartialSetOnFailure(t *testing.T) {
 		{"pull request fetch fails", fakeSource{prErr: boom}},
 		{"changed files fetch fails", fakeSource{pr: samplePR(), fileErr: boom}},
 		{"checks fetch fails", fakeSource{pr: samplePR(), checkErr: boom}},
+		{"diff fetch fails", fakeSource{pr: samplePR(), diffErr: boom}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := PR(context.Background(), tt.src, "opentalon", "talooner", 42)
@@ -291,6 +302,36 @@ func TestPRChecksPending(t *testing.T) {
 			}
 			if got["pr.checks_pending"] != tt.want {
 				t.Errorf("pr.checks_pending = %v, want %v", got["pr.checks_pending"], tt.want)
+			}
+		})
+	}
+}
+
+// pr.diff and pr.diff_truncated are always asserted, both values verbatim from
+// the source — including an empty, untruncated diff, which is the honest answer
+// for a PR whose changes are all binary (issue #9).
+func TestPRDiffAssertedWithTruncationFlag(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		diff      string
+		trunc     bool
+		wantDiff  string
+		wantTrunc bool
+	}{
+		{"complete diff", "@@ -1 +1 @@\n+x", false, "@@ -1 +1 @@\n+x", false},
+		{"truncated diff", "part", true, "part", true},
+		{"empty and complete", "", false, "", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := PR(context.Background(), fakeSource{pr: samplePR(), diff: tt.diff, trunc: tt.trunc}, "opentalon", "talooner", 42)
+			if err != nil {
+				t.Fatalf("PR: %v", err)
+			}
+			if got["pr.diff"] != tt.wantDiff {
+				t.Errorf("pr.diff = %q, want %q", got["pr.diff"], tt.wantDiff)
+			}
+			if got["pr.diff_truncated"] != tt.wantTrunc {
+				t.Errorf("pr.diff_truncated = %v, want %v", got["pr.diff_truncated"], tt.wantTrunc)
 			}
 		})
 	}
