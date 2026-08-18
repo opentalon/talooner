@@ -25,10 +25,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/opentalon/talooner-plugin/proto/taloonerpb"
 
+	"github.com/opentalon/talooner/internal/action"
 	"github.com/opentalon/talooner/internal/cluster"
 	"github.com/opentalon/talooner/internal/command"
 	"github.com/opentalon/talooner/internal/event"
@@ -162,8 +162,7 @@ func Run(ctx context.Context, r Runner) error {
 		return fmt.Errorf("evaluate %s#%d: %w", repo, ev.PR, err)
 	}
 
-	r.report(repo, ev.PR, resp)
-	return nil
+	return r.report(repo, ev.PR, resp)
 }
 
 // gate parses the command in a comment and checks the commander's access. It
@@ -198,10 +197,11 @@ func (r Runner) gate(ctx context.Context) (*command.Command, error) {
 	return cmd, nil
 }
 
-// report logs the decision. Executing it against GitHub is D's job; until then
-// this is the whole output of a run, and it is deliberately the same set the
-// executors will consume — actions, warnings, explanation.
-func (r Runner) report(repo string, pr int, resp *taloonerpb.EvaluatePrResponse) {
+// report logs the decision. Executing it against GitHub is D2 onwards; until
+// then the actions are decoded but not performed, which is already enough to
+// fail a run whose verdict this build cannot carry out — an action the bot
+// cannot decode is not one it may quietly drop.
+func (r Runner) report(repo string, pr int, resp *taloonerpb.EvaluatePrResponse) error {
 	for _, w := range resp.GetWarnings() {
 		r.Log.Warn("plugin warning", "code", w.GetCode(), "message", w.GetMessage())
 	}
@@ -209,28 +209,20 @@ func (r Runner) report(repo string, pr int, resp *taloonerpb.EvaluatePrResponse)
 		r.Log.Info("decision", "repo", repo, "pr", pr, "summary", s)
 	}
 
-	actions := resp.GetActions()
+	actions, err := action.FromProtos(resp.GetActions())
+	if err != nil {
+		return fmt.Errorf("decode the decision for %s#%d: %w", repo, pr, err)
+	}
 	if len(actions) == 0 {
 		// Not a silent no-op: no action firing is a verdict too, and D2 writes
 		// it as a check run.
 		r.Log.Info("no actions fired", "repo", repo, "pr", pr)
-		return
+		return nil
 	}
 	for _, a := range actions {
-		if a.GetVerb() == taloonerpb.Verb_VERB_UNSPECIFIED {
-			// D1 makes this a hard error. A verb that reaches no executor looks
-			// exactly like a rule that never matched, so it cannot stay quiet.
-			r.Log.Error("action has no verb", "repo", repo, "pr", pr)
-			continue
-		}
-		r.Log.Info("action", "verb", verbName(a.GetVerb()), "target", a.GetTarget(),
-			"assignee", a.GetAssignee(), "name", a.GetName(), "text", a.GetText())
+		r.Log.Info("action", "repo", repo, "pr", pr, "verb", a.Verb, "plan", action.Describe(a))
 	}
-}
-
-// verbName renders VERB_APPROVE as approve, which is how rulesets spell it.
-func verbName(v taloonerpb.Verb) string {
-	return strings.ToLower(strings.TrimPrefix(v.String(), "VERB_"))
+	return nil
 }
 
 // Main is the action entry point: build everything from the environment, run,

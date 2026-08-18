@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"github.com/opentalon/opentalon/proto/pluginpb"
 	"github.com/opentalon/talooner-plugin/proto/taloonerpb"
 
+	"github.com/opentalon/talooner/internal/action"
 	"github.com/opentalon/talooner/internal/cluster"
 	"github.com/opentalon/talooner/internal/command"
 	"github.com/opentalon/talooner/internal/event"
@@ -270,6 +272,22 @@ func TestReviewCommandRunsTheWholeSpine(t *testing.T) {
 // A comment that is not addressed to Talooner must not reach GitHub at all. The
 // permission call is the one to watch: it is what tells an unauthorised account
 // the bot is installed.
+// A verdict this build cannot decode — an action with no verb, or one from a
+// newer cluster — fails the run. Logging it and carrying on would report success
+// for a decision that was never carried out.
+func TestUndecodableActionFailsTheRun(t *testing.T) {
+	f := &fakeCluster{answers: evaluated(
+		&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_BLOCK, Target: "pr.merge"},
+		&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_UNSPECIFIED},
+	)}
+	gh := &fakeGitHub{}
+
+	err := Run(t.Context(), Runner{Event: comment("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)})
+	if !errors.Is(err, action.ErrUnknownVerb) {
+		t.Fatalf("Run returned %v, want action.ErrUnknownVerb", err)
+	}
+}
+
 func TestCommentWithNoCommandTouchesNothing(t *testing.T) {
 	f := &fakeCluster{answers: evaluated()}
 	gh := &fakeGitHub{}
