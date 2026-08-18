@@ -382,9 +382,8 @@ func (g *fakeGitHub) client(t *testing.T) *github.Client {
 		case strings.HasSuffix(r.URL.Path, "/status"):
 			_, _ = fmt.Fprint(w, `{"state":"success","total_count":0,"statuses":[]}`)
 
-		case strings.HasSuffix(r.URL.Path, "/check-runs") && r.Method == http.MethodGet:
-			// Already handled above; kept distinct only for readability.
-			fallthrough
+		case strings.HasSuffix(r.URL.Path, "/check-runs"):
+			_, _ = fmt.Fprint(w, `{"total_count":0,"check_runs":[]}`)
 
 		default: // the pull request itself
 			if g.prStatus != 0 {

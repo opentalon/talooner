@@ -10,7 +10,8 @@ import (
 )
 
 // mergeablePollAttempts bounds how many times ResolveMergeable re-fetches the
-// PR while GitHub's background job computes mergeability. GitHub usually
+// PR after the first fetch, while GitHub's background job computes
+// mergeability — mergeablePollAttempts+1 GETs in total. GitHub usually
 // resolves it within a couple of seconds; past this the fact is omitted rather
 // than guessed (facts.md, "pr.mergeable").
 const mergeablePollAttempts = 5
