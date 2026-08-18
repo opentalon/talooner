@@ -4,9 +4,9 @@
 // It is the walking skeleton of architecture.md, "Evaluate" — subscribed? →
 // load the ruleset from the base branch → extract facts → evaluate_pr → report
 // — with the pieces the later tickets own left as one log line each. The one
-// thing written back to GitHub so far is the talooner check run; the review,
-// the sticky comments and the assignments are D3 onwards, the full
-// .github/talooner loader is E1, and fork plan mode is E2.
+// thing written back to GitHub so far is the talooner check run and the sticky
+// review comment; the review verdict, the assignments and the notifications are
+// D4 onwards, the full .github/talooner loader is E1, and fork plan mode is E2.
 //
 // Once a run knows the head sha it owes that sha a check run, including when it
 // breaks. A failure of Talooner's own is written as neutral, never failure: a
@@ -39,6 +39,7 @@ import (
 	"github.com/opentalon/talooner/internal/check"
 	"github.com/opentalon/talooner/internal/cluster"
 	"github.com/opentalon/talooner/internal/command"
+	"github.com/opentalon/talooner/internal/comment"
 	"github.com/opentalon/talooner/internal/event"
 	"github.com/opentalon/talooner/internal/facts"
 	"github.com/opentalon/talooner/internal/github"
@@ -221,18 +222,22 @@ func (r Runner) gate(ctx context.Context) (*command.Command, error) {
 
 	if parseErr != nil {
 		// An authorized user typing something wrong is worth exactly one reply,
-		// which needs the comment writer (D3). Until then it is a log line.
-		r.Log.Warn("command not understood", "actor", ev.Actor, "err", parseErr,
-			"reply", command.Usage(r.Handle))
+		// and exactly one comment however many times they retry: the usage text
+		// is its own sticky topic, so it is edited rather than piled up, and it
+		// never overwrites the verdict.
+		r.Log.Warn("command not understood", "actor", ev.Actor, "err", parseErr)
+		if err := r.sticky(ctx, comment.TopicUsage, comment.Usage(command.Usage(r.Handle)), false); err != nil {
+			return nil, err
+		}
 		return nil, nil
 	}
 	return cmd, nil
 }
 
-// report writes the decision as the talooner check run. The rest of the
-// verdict — the review, the sticky comment, the assignees — is D3 onwards; the
-// check run comes first because it is the machine-readable half and the one
-// branch protection can gate on.
+// report writes the decision as the sticky review comment and the talooner
+// check run — the human-readable half and the machine-readable one. The rest of
+// the verdict — the GitHub review, the assignees, the review requests — is D4
+// onwards.
 //
 // The action set is decoded before anything is written, so a verdict carrying a
 // verb this build has never heard of fails the run instead of being written as
@@ -256,11 +261,24 @@ func (r Runner) report(ctx context.Context, repo string, pr *github.PullRequest,
 		r.Log.Info("action", "repo", repo, "pr", r.Event.PR, "verb", a.Verb, "plan", action.Describe(a))
 	}
 
+	// The sticky comment goes first, and the check run last. Both orderings are
+	// deliberate: the check run is the run's "everything worked" marker, so a
+	// comment that could not be written leaves no verdict standing and failOpen
+	// writes the neutral check over whatever the previous run left. The reverse
+	// order would have a failed comment write overwrite this run's own correct
+	// verdict with a neutral one.
+	if err := r.review(ctx, repo, pr, actions, warnings, summary); err != nil {
+		return err
+	}
+
 	// The check run is derived from the whole action set rather than performed
 	// by one verb's executor: it is one value for the decision, and it has to be
-	// writable even for a verb whose GitHub half is not built yet (D3–D6). No
-	// registry is executed here for exactly that reason — a half-built registry
-	// would be the one thing that can silently drop an action.
+	// writable even for a verb whose GitHub half is not built yet (D4–D6). The
+	// review comment is the same shape of thing — `do comment` firing three
+	// times is one comment with three findings, not three comments — so it is
+	// also derived here rather than executed. Registry.Execute stays uncalled
+	// until D4, where approve is the first verb that really is one action, one
+	// GitHub write.
 	cr := check.Decision(actions, warnings, summary)
 	cr.HeadSHA = pr.HeadSHA
 	if _, err := r.GitHub.UpsertCheckRun(ctx, r.Event.Owner, r.Event.Repo, cr); err != nil {
@@ -268,6 +286,46 @@ func (r Runner) report(ctx context.Context, repo string, pr *github.PullRequest,
 	}
 	r.Log.Info("check run written", "repo", repo, "pr", r.Event.PR,
 		"sha", pr.HeadSHA, "conclusion", cr.Conclusion, "actions", len(actions))
+	return nil
+}
+
+// review writes the verdict as the sticky review comment, or retires it.
+//
+// A run with no findings and no warnings posts nothing: the check run already
+// says the rules passed, and a comment costs every watcher an email. But if a
+// previous run left findings on this PR, they are now wrong, so the comment is
+// edited to its resolved state rather than left standing — and never deleted,
+// because the discussion under it is somebody's (actions.md, "Reversibility").
+func (r Runner) review(ctx context.Context, repo string, pr *github.PullRequest,
+	actions []action.Action, warnings []check.Warning, summary string,
+) error {
+	body, editOnly := comment.Review(actions, warnings, summary, pr.HeadSHA), false
+	if comment.Empty(actions, warnings) {
+		body, editOnly = comment.Resolved(pr.HeadSHA), true
+	}
+	if err := r.sticky(ctx, comment.TopicReview, body, editOnly); err != nil {
+		return fmt.Errorf("write the review comment for %s#%d: %w", repo, r.Event.PR, err)
+	}
+	return nil
+}
+
+// sticky writes one topic's comment on the event's PR. editOnly writes nothing
+// when the topic has no comment yet.
+func (r Runner) sticky(ctx context.Context, topic, body string, editOnly bool) error {
+	ev := r.Event
+	id, err := r.GitHub.UpsertComment(ctx, ev.Owner, ev.Repo, ev.PR, github.StickyComment{
+		Marker:   comment.Marker(topic),
+		Body:     body,
+		EditOnly: editOnly,
+	})
+	if err != nil {
+		return err
+	}
+	if id == 0 {
+		return nil // nothing to retire, and nothing posted
+	}
+	r.Log.Info("sticky comment written",
+		"repo", ev.Owner+"/"+ev.Repo, "pr", ev.PR, "topic", topic, "id", id)
 	return nil
 }
 
@@ -301,6 +359,15 @@ func (r Runner) rulesetBroken(ctx context.Context, repo string, pr *github.PullR
 	cr.HeadSHA = pr.HeadSHA
 	if _, err := r.GitHub.UpsertCheckRun(ctx, r.Event.Owner, r.Event.Repo, cr); err != nil {
 		r.Log.Error("cannot write the neutral check run", "repo", repo, "pr", r.Event.PR, "err", err)
+	}
+
+	// The annotations pin the error to its line; this is the summary comment
+	// actions.md pairs them with, and it takes over the review topic because it
+	// is the current answer to the same question — the findings of the run
+	// before this one no longer hold.
+	if err := r.sticky(ctx, comment.TopicReview, comment.Broken(cause.Error(), pr.HeadSHA), false); err != nil {
+		// The run is already failing with a better error than this one.
+		r.Log.Error("cannot write the review comment", "repo", repo, "pr", r.Event.PR, "err", err)
 	}
 	return reported{cause}
 }
