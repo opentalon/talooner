@@ -51,9 +51,15 @@ with a one-comment "no ruleset found" and does nothing else.
 ## Built-in `pr.*` facts
 
 Pure functions of the PR at a given head sha. Always asserted, never absent —
-with the single deliberate exception of `pr.mergeable`, which GitHub computes
-asynchronously and which is omitted rather than guessed while it is still `null`
-(see below).
+with three deliberate exceptions, all of them "we do not know", not "it is
+false":
+
+- `pr.mergeable` is omitted while GitHub still reports `null` (see below).
+- `pr.tests_passing` and `pr.lint_passing` are omitted whenever the fact has no
+  determined value — the patterns in `config.yaml` match no check, any matched
+  check is still running, or a matched check has a conclusion the bot does not
+  recognise (see below). A positive condition on an omitted fact simply does not
+  fire (facts.md, "Unset is false"), which is exactly the gate's safe state.
 
 | Fact | Type | Source |
 |---|---|---|
@@ -123,6 +129,25 @@ Semantics, and they matter:
 - any matched check `failure`/`timed_out`/`cancelled` → `false`
 - any still `queued`/`in_progress` → **fact unset**, not `false`
 - no check matches any pattern → **fact unset**, not `true`
+
+The matched set can also contain a check whose conclusion the bot does not
+recognise — GitHub emits `neutral`, `skipped`, `stale` and `action_required` on
+completed checks, none of which is "success" or a named failure. Any matched
+check with one of those conclusions **unsettles** the fact: it is left unset
+rather than guessed. Precedence when a mixed set lands: pending beats everything
+(a gate must not fire while CI is in flight); a recognised failure beats an
+unknown conclusion (a PR with one red test and one neutral test is *not*
+passing); an unknown conclusion beats success-only (we do not claim passing on a
+check whose outcome we cannot name). The alternative — unset on any unknown even
+when another matched check failed — would let a red test go unblocked behind a
+neutral one, which is the worse direction.
+
+The patterns come from `config.yaml` (`checks.tests` / `checks.lint`), read from
+the **base** branch at its own ref like the ruleset (architecture.md, "Fork
+safety") — C3. A missing file is an answer: no patterns, so both facts stay
+unset. A present-but-unparseable file fails the run, the same fail-open shape as
+a broken ruleset (the bot's own fault is a neutral check, never a policy
+outcome).
 
 See "Unset is false" below. A rule that auto-approves on
 `attr "pr.tests_passing" == true` must not fire while CI is still running, and must
