@@ -1,9 +1,9 @@
 # Talooner
 
-Deterministic GitHub review bot built on OpenTalon + Talon language.
+Deterministic GitHub review bot built on OpenTalon + tln language.
 
-A repo declares its review policy as Talon rules. Talooner ingests PR facts,
-runs the rules through the Talon inference engine, and executes the resulting
+A repo declares its review policy as tln rules. Talooner ingests PR facts,
+runs the rules through the tln inference engine, and executes the resulting
 actions against the GitHub API. No model decides whether a PR is approved —
 rules do. An LLM is called only where a rule explicitly asks for it
 (`do llm_review ...`), and its output re-enters the engine as a fact.
@@ -56,8 +56,8 @@ rule "Require human review for critical paths" {
 ```
 
 The runnable version of this ruleset, with a passing test suite, is
-[`examples/talooner_review.tln`](https://github.com/opentalon/talon-language/blob/main/examples/talooner_review.tln)
-in `talon-language`.
+[`examples/talooner_review.tln`](https://github.com/opentalon/tln-language/blob/main/examples/talooner_review.tln)
+in `tln-language`.
 
 and wires up the action in `.github/workflows/talooner.yml`:
 
@@ -122,11 +122,11 @@ engine internals, fact scoping, `llm_review`, cluster deployment. Start with its
 | # | Decision |
 |---|---|
 | 1 | **A GitHub Action, not a hosted App.** Talooner runs inside the reviewed repo's own Actions runner, triggered by native workflow events. No webhook endpoint, no long-running process, no App registration, no shared anything. Identity is `github-actions[bot]`; credentials are the run's `GITHUB_TOKEN` plus two repo secrets. |
-| 2 | **Thin stateless action + `talooner-plugin` in an OpenTalon cluster.** The action knows GitHub and nothing about Talon; the plugin knows Talon and nothing about GitHub. All state is cluster-side, which is what lets the GitHub half be a process that lives for 30 seconds. |
+| 2 | **Thin stateless action + `talooner-plugin` in an OpenTalon cluster.** The action knows GitHub and nothing about tln; the plugin knows tln and nothing about GitHub. All state is cluster-side, which is what lets the GitHub half be a process that lives for 30 seconds. |
 | 3 | **Self-hosted. Forever.** No hosted tier, ever. You bring a VPS and run the cluster; the cluster holds your LLM credentials; you pay for your own tokens. |
 | 4 | **Advisory, never merges. in v1.** `contents: read`, no `contents: write`. Check runs gate merges only if the repo owner marks them required. |
-| 5 | **Facts live in `talon-db`**, per PR, persistent — required for reactive rules. |
-| 6 | **Path predicates are Talon-native** (`define` over `pr.changed_files`), not YAML globs. |
+| 5 | **Facts live in `tln-db`**, per PR, persistent — required for reactive rules. |
+| 6 | **Path predicates are tln-native** (`define` over `pr.changed_files`), not YAML globs. |
 | 7 | **Defeasible conflict resolution**, not ad-hoc "block wins". |
 | 8 | **CLI / `gh` extension only in v1.** No web dashboard. |
 | 9 | **No LLM cache layer** — `llm_review` results are facts keyed by head sha, which is the cache. |
@@ -150,7 +150,7 @@ whoever ran the rule.
 
 1. A VPS running an **OpenTalon cluster**, reachable from GitHub's runners over
    TLS (or a self-hosted runner, if the cluster stays private)
-2. `talooner-plugin` loaded in that cluster, with `talon-db` available
+2. `talooner-plugin` loaded in that cluster, with `tln-db` available
 3. LLM provider credentials configured **in the cluster**
 4. `.github/workflows/talooner.yml` in each reviewed repo
 5. Two repo (or org) secrets: `OPENTALON_HOST`, `OPENTALON_API_KEY`
@@ -163,8 +163,8 @@ the standing cost; 4–5 are a two-minute setup per repo. Details in `auth.md`.
 | Repo | Role |
 |---|---|
 | [`opentalon`](https://github.com/opentalon/opentalon) | Core orchestration platform and plugin host |
-| [`talon-language`](https://github.com/opentalon/talon-language) | The Talon DSL: grammar, parser, inference engine, `.tln.test` |
-| [`talon-db`](https://github.com/opentalon/talon-db) | Embedded fact store backing Talon |
+| [`tln-language`](https://github.com/opentalon/tln-language) | The tln DSL: grammar, parser, inference engine, `.tln.test` |
+| [`tln-db`](https://github.com/opentalon/tln-db) | Embedded fact store backing tln |
 | [`talooner-plugin`](https://github.com/opentalon/talooner-plugin) | Server side — engine, fact store, proto |
 
 ## Contributing
@@ -177,8 +177,8 @@ questions are answered in
 [`talooner-plugin/OPEN-QUESTIONS.md`](https://github.com/opentalon/talooner-plugin/blob/main/OPEN-QUESTIONS.md);
 three of them turned into upstream fixes, all landed 2026-08-07, and the phase-0
 exit artifact
-([`examples/talooner_review.tln`](https://github.com/opentalon/talon-language/blob/main/examples/talooner_review.tln))
-is in `talon-language` with a passing test suite.
+([`examples/talooner_review.tln`](https://github.com/opentalon/tln-language/blob/main/examples/talooner_review.tln))
+is in `tln-language` with a passing test suite.
 
 ## License
 
