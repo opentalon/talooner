@@ -18,6 +18,10 @@ type Source interface {
 	ResolveMergeable(ctx context.Context, owner, repo string, number int) (*github.PullRequest, error)
 	ChangedFiles(ctx context.Context, owner, repo string, number int) ([]string, error)
 	CommitChecks(ctx context.Context, owner, repo, headSHA string) (github.Checks, error)
+	// Diff is the concatenated file patches, capped at maxBytes. The second
+	// return is whether the cap was hit, so a rule can tell a complete diff from
+	// a truncated one (issue #9).
+	Diff(ctx context.Context, owner, repo string, number, maxBytes int) (string, bool, error)
 }
 
 // PR extracts the built-in pr.* facts (facts.md, "Built-in pr.* facts"). They
@@ -66,6 +70,11 @@ func PR(ctx context.Context, src Source, owner, repo string, number int) (Set, e
 		return nil, fmt.Errorf("extract pr.checks_pending for %s/%s#%d: %w", owner, repo, number, err)
 	}
 
+	diff, truncated, err := src.Diff(ctx, owner, repo, number, github.DiffMaxBytes)
+	if err != nil {
+		return nil, fmt.Errorf("extract pr.diff for %s/%s#%d: %w", owner, repo, number, err)
+	}
+
 	s := New()
 	s.Int("pr.number", pr.Number)
 	s.String("pr.head_sha", pr.HeadSHA)
@@ -84,6 +93,12 @@ func PR(ctx context.Context, src Source, owner, repo string, number int) (Set, e
 	s.Strings("pr.changed_files", changed)
 	s.Strings("pr.labels", pr.Labels)
 	s.Bool("pr.checks_pending", checks.Pending())
+	// pr.diff is the whole patch set, capped at github.DiffMaxBytes. Both facts
+	// are always asserted: a PR with no textual changes gets an empty diff and
+	// truncated false, which is honest — there is nothing to show. A diff the cap
+	// cut off gets truncated true so it never reads as complete (issue #9).
+	s.String("pr.diff", diff)
+	s.Bool("pr.diff_truncated", truncated)
 	// mergeable is the one fact GitHub computes asynchronously and returns null
 	// for until it has — the common case right after a push, which is when a run
 	// fires. A nil here is "GitHub has not said yet", which is omitted rather

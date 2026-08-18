@@ -74,7 +74,8 @@ asynchronously and which is omitted rather than guessed while it is still `null`
 | `pr.checks_pending` | bool | check runs + statuses — see below |
 | `pr.tests_passing` | bool | check runs — see below |
 | `pr.lint_passing` | bool | check runs — see below |
-| `pr.diff` | string (ref) | Files API patches, size-capped |
+| `pr.diff` | string | Files API patches, concatenated and size-capped at 1 MiB |
+| `pr.diff_truncated` | bool | true when `pr.diff` hit the cap and was cut short (issue #9) |
 | `pr.new_dependencies` | int | manifest diff — see below |
 
 ### `pr.mergeable` and `pr.checks_pending`
@@ -127,6 +128,34 @@ See "Unset is false" below. A rule that auto-approves on
 `attr "pr.tests_passing" == true` must not fire while CI is still running, and must
 not fire on a repo that has no tests at all — leaving the fact unset achieves
 that, because a positive condition on an unset fact doesn't match.
+
+### `pr.diff` and `pr.diff_truncated`
+
+`pr.diff` is the concatenated unified diffs of every file the PR touches, pulled
+from the same Files API `patch` field `pr.changed_files` reads the names from.
+Binary files (null `patch`) contribute nothing, and the files are joined with a
+newline so each one's `diff --git` header stays intact.
+
+It is **size-capped at 1 MiB** (`github.DiffMaxBytes`), a default the
+`config.yaml` cap will override in E1. The cap is file-granular: whole files are
+appended while they fit, and the moment the next file would push past the limit
+the loop stops. **`pr.diff_truncated` is a first-class fact** — a rule can match
+on it (`attr "pr.diff_truncated" == true`), and v1.5's `llm_review` depends on it
+being honest. Both facts are always asserted:
+
+- a diff that fits is asserted complete, `pr.diff_truncated` false;
+- a diff cut off at the cap is asserted with `pr.diff_truncated` true — it must
+  never read as complete;
+- a single file larger than the cap yields an empty `pr.diff` and
+  `pr.diff_truncated` true, because shipping half a patch is worse than shipping
+  none with the flag set;
+- a PR whose changes are all binary gets an empty `pr.diff` and
+  `pr.diff_truncated` false, which is the honest answer — there is nothing
+  textual to show.
+
+The unhappy paths that define the cap — exactly at, one byte over, one byte under,
+a binary file, and individually-small patches that collectively exceed it — all
+behave so that a truncated diff is always flagged, never silent.
 
 ### `pr.new_dependencies`
 
