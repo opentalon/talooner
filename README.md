@@ -17,9 +17,10 @@ own LLM credentials. There is no hosted tier and no plan for one.
 
 > **Status: early v1.** The walking skeleton runs end to end — event, command
 > gate, subscription, base-branch ruleset, `pr.*` facts, `evaluate_pr` — and the
-> decision is published as the `talooner` check run. The rest of the verdict is
-> not: no review, no comments, no assignments yet, and most of the fact set is
-> still to come. Not usable on a real repo. See the
+> decision is published as the `talooner` check run and as one sticky review
+> comment, edited in place. The rest of the verdict is not: no GitHub review,
+> no assignments, no review requests yet, and most of the fact set is still to
+> come. Not usable on a real repo. See the
 > [v1 milestone](https://github.com/opentalon/talooner/milestone/1).
 
 ## Example
