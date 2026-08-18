@@ -8,7 +8,8 @@ import "fmt"
 //
 // block and approve can both fire; the tie is resolved by the plugin's
 // defeasible machinery, not here. What reaches the bot is both actions and a
-// warning, and block-wins is the check-run writer's last-resort tiebreak (D2).
+// warning, and block-wins is the last-resort tiebreak in the check run (D2) and
+// in the review (review.Verdict) alike, so the two never disagree.
 var blockSpec = spec{
 	verb: VerbBlock,
 	validate: func(a Action) error {

@@ -131,17 +131,42 @@ type Executor interface {
 	Execute(ctx context.Context, a Action) error
 }
 
+// Derived is the executor for a verb whose GitHub effect is written from the
+// whole action set rather than one action at a time — `do comment` firing three
+// times is one comment with three findings, not three comments. It performs
+// nothing because the effect is already written by the time the registry runs.
+//
+// It exists so that "no executor" keeps meaning "nobody performs this", which
+// is what makes ErrNoExecutor worth failing a run over. reason is not read; it
+// is there so a registry entry says at its construction why it is inert.
+func Derived(reason string) Executor { return derived(reason) }
+
+type derived string
+
+func (derived) Execute(context.Context, Action) error { return nil }
+
 // Registry maps every verb to the executor that performs it.
 type Registry map[Verb]Executor
+
+// Validate reports whether the whole set can be performed, without performing
+// any of it. Execute calls it; a caller that writes something else from the
+// same decision calls it first, so a verdict this registry cannot carry out
+// fails before half of it has been published.
+func (r Registry) Validate(actions []Action) error {
+	for i, a := range actions {
+		if err := r.check(a); err != nil {
+			return fmt.Errorf("action %d: %w", i, err)
+		}
+	}
+	return nil
+}
 
 // Execute performs a whole action set: everything is validated first, then
 // performed in order. The two passes matter — an action set is one verdict, and
 // a batch that dies halfway through leaves GitHub holding half of it.
 func (r Registry) Execute(ctx context.Context, actions []Action) error {
-	for i, a := range actions {
-		if err := r.check(a); err != nil {
-			return fmt.Errorf("action %d: %w", i, err)
-		}
+	if err := r.Validate(actions); err != nil {
+		return err
 	}
 	for i, a := range actions {
 		if err := r[a.Verb].Execute(ctx, a); err != nil {

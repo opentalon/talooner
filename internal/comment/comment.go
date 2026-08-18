@@ -41,6 +41,10 @@ const (
 	// TopicUsage is the reply to a command Talooner did not understand. It is
 	// its own topic so a typo does not overwrite the verdict.
 	TopicUsage = "usage"
+	// TopicVerdict marks the body of the GitHub review Talooner submits, not a
+	// comment. It is a topic all the same: it is how the next run finds the
+	// review it left, so it has to be spelled the way every other marker is.
+	TopicVerdict = "verdict"
 )
 
 // Marker is the HTML comment identifying a topic. It is what makes a comment

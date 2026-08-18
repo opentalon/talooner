@@ -3,10 +3,11 @@
 //
 // It is the walking skeleton of architecture.md, "Evaluate" — subscribed? →
 // load the ruleset from the base branch → extract facts → evaluate_pr → report
-// — with the pieces the later tickets own left as one log line each. The one
-// thing written back to GitHub so far is the talooner check run and the sticky
-// review comment; the review verdict, the assignments and the notifications are
-// D4 onwards, the full .github/talooner loader is E1, and fork plan mode is E2.
+// — with the pieces the later tickets own left as one log line each. What is
+// written back to GitHub so far is the talooner check run, the sticky review
+// comment and the approve/block review; the assignments and review requests are
+// D5, the notifications D6, the full .github/talooner loader E1, and fork plan
+// mode E2.
 //
 // Once a run knows the head sha it owes that sha a check run, including when it
 // breaks. A failure of Talooner's own is written as neutral, never failure: a
@@ -43,6 +44,7 @@ import (
 	"github.com/opentalon/talooner/internal/event"
 	"github.com/opentalon/talooner/internal/facts"
 	"github.com/opentalon/talooner/internal/github"
+	"github.com/opentalon/talooner/internal/review"
 )
 
 // RulesetPath is the tenant ruleset, read from the base branch. The rest of
@@ -261,24 +263,50 @@ func (r Runner) report(ctx context.Context, repo string, pr *github.PullRequest,
 		r.Log.Info("action", "repo", repo, "pr", r.Event.PR, "verb", a.Verb, "plan", action.Describe(a))
 	}
 
+	// The registry is built and checked before anything is written. A verdict
+	// carrying a verb nothing here performs — assign and require until D5,
+	// notify until D6 — fails the run rather than being carried out in part: an
+	// action with no executor is a hard error and never a no-op (actions.md),
+	// and half a verdict published is the one outcome worse than none.
+	rev := review.New(r.GitHub, r.Event.Owner, r.Event.Repo, r.Event.PR,
+		pr.HeadSHA, review.Verdict(actions), r.Log)
+	registry := action.Registry{
+		action.VerbApprove: rev,
+		action.VerbBlock:   rev,
+		action.VerbComment: action.Derived("written as the sticky review comment from the whole action set"),
+		action.VerbEmit:    action.Derived("asserted plugin-side; emit has no GitHub effect"),
+	}
+	if err := registry.Validate(actions); err != nil {
+		return fmt.Errorf("cannot carry out the decision for %s#%d: %w", repo, r.Event.PR, err)
+	}
+
 	// The sticky comment goes first, and the check run last. Both orderings are
 	// deliberate: the check run is the run's "everything worked" marker, so a
 	// comment that could not be written leaves no verdict standing and failOpen
 	// writes the neutral check over whatever the previous run left. The reverse
 	// order would have a failed comment write overwrite this run's own correct
 	// verdict with a neutral one.
-	if err := r.review(ctx, repo, pr, actions, warnings, summary); err != nil {
+	if err := r.reviewComment(ctx, repo, pr, actions, warnings, summary); err != nil {
+		return err
+	}
+
+	// Then the actions themselves. approve and block are one GitHub review
+	// between them, and Sync runs whether or not either fired: a decision with
+	// neither in it has to dismiss the review the last one left, and retraction
+	// is the absence of an action, which no executor is ever handed.
+	if err := registry.Execute(ctx, actions); err != nil {
+		return fmt.Errorf("carry out the decision for %s#%d: %w", repo, r.Event.PR, err)
+	}
+	if err := rev.Sync(ctx); err != nil {
 		return err
 	}
 
 	// The check run is derived from the whole action set rather than performed
-	// by one verb's executor: it is one value for the decision, and it has to be
-	// writable even for a verb whose GitHub half is not built yet (D4–D6). The
+	// by one verb's executor: it is one value for the decision, and it is
+	// written even for a verb whose GitHub half is not built yet (D5–D6). The
 	// review comment is the same shape of thing — `do comment` firing three
-	// times is one comment with three findings, not three comments — so it is
-	// also derived here rather than executed. Registry.Execute stays uncalled
-	// until D4, where approve is the first verb that really is one action, one
-	// GitHub write.
+	// times is one comment with three findings, not three comments. It goes
+	// last, as the run's "everything worked" marker.
 	cr := check.Decision(actions, warnings, summary)
 	cr.HeadSHA = pr.HeadSHA
 	if _, err := r.GitHub.UpsertCheckRun(ctx, r.Event.Owner, r.Event.Repo, cr); err != nil {
@@ -289,14 +317,15 @@ func (r Runner) report(ctx context.Context, repo string, pr *github.PullRequest,
 	return nil
 }
 
-// review writes the verdict as the sticky review comment, or retires it.
+// reviewComment writes the verdict as the sticky review comment, or retires it.
+// The GitHub review itself is the review package's; this is the prose half.
 //
 // A run with no findings and no warnings posts nothing: the check run already
 // says the rules passed, and a comment costs every watcher an email. But if a
 // previous run left findings on this PR, they are now wrong, so the comment is
 // edited to its resolved state rather than left standing — and never deleted,
 // because the discussion under it is somebody's (actions.md, "Reversibility").
-func (r Runner) review(ctx context.Context, repo string, pr *github.PullRequest,
+func (r Runner) reviewComment(ctx context.Context, repo string, pr *github.PullRequest,
 	actions []action.Action, warnings []check.Warning, summary string,
 ) error {
 	body, editOnly := comment.Review(actions, warnings, summary, pr.HeadSHA), false
