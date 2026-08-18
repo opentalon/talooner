@@ -3,9 +3,16 @@
 //
 // It is the walking skeleton of architecture.md, "Evaluate" — subscribed? →
 // load the ruleset from the base branch → extract facts → evaluate_pr → report
-// — with the pieces the later tickets own left as one log line each. Nothing
-// here writes to GitHub yet: the executors are D, the check run is D2, the full
+// — with the pieces the later tickets own left as one log line each. The one
+// thing written back to GitHub so far is the talooner check run; the review,
+// the sticky comments and the assignments are D3 onwards, the full
 // .github/talooner loader is E1, and fork plan mode is E2.
+//
+// Once a run knows the head sha it owes that sha a check run, including when it
+// breaks. A failure of Talooner's own is written as neutral, never failure: a
+// repo that marked the check required must not be blocked by the bot's bugs
+// (actions.md, "Check run"). The job itself still exits non-zero, so the
+// failure is visible where it belongs.
 //
 // Two orderings in here are security controls rather than style:
 //
@@ -29,6 +36,7 @@ import (
 	"github.com/opentalon/talooner-plugin/proto/taloonerpb"
 
 	"github.com/opentalon/talooner/internal/action"
+	"github.com/opentalon/talooner/internal/check"
 	"github.com/opentalon/talooner/internal/cluster"
 	"github.com/opentalon/talooner/internal/command"
 	"github.com/opentalon/talooner/internal/event"
@@ -131,11 +139,28 @@ func Run(ctx context.Context, r Runner) error {
 		return fmt.Errorf("%s#%d came back with no base ref", repo, ev.PR)
 	}
 
+	// From here on there is a head sha to write a verdict against, so every
+	// failure owes this PR a check run. failOpen writes the neutral one: a run
+	// that died halfway must not leave the previous run's success standing, and
+	// must not turn a Talooner bug into a merge blocker either.
+	if err := r.evaluate(ctx, repo, pr); err != nil {
+		return r.failOpen(ctx, repo, pr, err)
+	}
+	return nil
+}
+
+// evaluate is the part of a run that owes a check run: load the ruleset, extract
+// the facts, ask the cluster, write the verdict.
+func (r Runner) evaluate(ctx context.Context, repo string, pr *github.PullRequest) error {
+	ev := r.Event
+
 	ruleset, err := r.GitHub.FileContent(ctx, ev.Owner, ev.Repo, RulesetPath, pr.BaseRef)
 	if err != nil {
 		if errors.Is(err, github.ErrNotFound) {
-			// Not an error: the repo has not onboarded. E1 turns this into one
-			// comment saying so.
+			// Not an error, and deliberately not a check run either: a repo that
+			// has not onboarded gets no talooner check at all, rather than a
+			// neutral one implying the bot tried and failed. E1 turns this into
+			// one comment saying so.
 			r.Log.Info("no ruleset on the base branch, nothing to evaluate",
 				"repo", repo, "pr", ev.PR, "path", RulesetPath, "ref", pr.BaseRef)
 			return nil
@@ -159,10 +184,17 @@ func Run(ctx context.Context, r Runner) error {
 		Mode: cluster.ModeExecute,
 	})
 	if err != nil {
-		return fmt.Errorf("evaluate %s#%d: %w", repo, ev.PR, err)
+		evalErr := fmt.Errorf("evaluate %s#%d: %w", repo, ev.PR, err)
+		if !errors.Is(err, cluster.ErrAction) {
+			return evalErr // transport, not the ruleset: nothing to annotate
+		}
+		// The plugin ran and refused. Usually that is a ruleset that will not
+		// compile, and evaluate_pr says so without a position, so the line
+		// numbers come from a second call.
+		return r.rulesetBroken(ctx, repo, pr, string(ruleset), evalErr)
 	}
 
-	return r.report(repo, ev.PR, resp)
+	return r.report(ctx, repo, pr, resp)
 }
 
 // gate parses the command in a comment and checks the commander's access. It
@@ -197,33 +229,107 @@ func (r Runner) gate(ctx context.Context) (*command.Command, error) {
 	return cmd, nil
 }
 
-// report logs the decision. Executing it against GitHub is D2 onwards; until
-// then the actions are decoded but not performed, which is already enough to
-// fail a run whose verdict this build cannot carry out — an action the bot
-// cannot decode is not one it may quietly drop.
-func (r Runner) report(repo string, pr int, resp *taloonerpb.EvaluatePrResponse) error {
+// report writes the decision as the talooner check run. The rest of the
+// verdict — the review, the sticky comment, the assignees — is D3 onwards; the
+// check run comes first because it is the machine-readable half and the one
+// branch protection can gate on.
+//
+// The action set is decoded before anything is written, so a verdict carrying a
+// verb this build has never heard of fails the run instead of being written as
+// a check run that describes half of it.
+func (r Runner) report(ctx context.Context, repo string, pr *github.PullRequest, resp *taloonerpb.EvaluatePrResponse) error {
+	warnings := make([]check.Warning, 0, len(resp.GetWarnings()))
 	for _, w := range resp.GetWarnings() {
 		r.Log.Warn("plugin warning", "code", w.GetCode(), "message", w.GetMessage())
+		warnings = append(warnings, check.Warning{Code: w.GetCode(), Message: w.GetMessage()})
 	}
-	if s := resp.GetExplain().GetSummary(); s != "" {
-		r.Log.Info("decision", "repo", repo, "pr", pr, "summary", s)
+	summary := resp.GetExplain().GetSummary()
+	if summary != "" {
+		r.Log.Info("decision", "repo", repo, "pr", r.Event.PR, "summary", summary)
 	}
 
 	actions, err := action.FromProtos(resp.GetActions())
 	if err != nil {
-		return fmt.Errorf("decode the decision for %s#%d: %w", repo, pr, err)
-	}
-	if len(actions) == 0 {
-		// Not a silent no-op: no action firing is a verdict too, and D2 writes
-		// it as a check run.
-		r.Log.Info("no actions fired", "repo", repo, "pr", pr)
-		return nil
+		return fmt.Errorf("decode the decision for %s#%d: %w", repo, r.Event.PR, err)
 	}
 	for _, a := range actions {
-		r.Log.Info("action", "repo", repo, "pr", pr, "verb", a.Verb, "plan", action.Describe(a))
+		r.Log.Info("action", "repo", repo, "pr", r.Event.PR, "verb", a.Verb, "plan", action.Describe(a))
 	}
+
+	// The check run is derived from the whole action set rather than performed
+	// by one verb's executor: it is one value for the decision, and it has to be
+	// writable even for a verb whose GitHub half is not built yet (D3–D6). No
+	// registry is executed here for exactly that reason — a half-built registry
+	// would be the one thing that can silently drop an action.
+	cr := check.Decision(actions, warnings, summary)
+	cr.HeadSHA = pr.HeadSHA
+	if _, err := r.GitHub.UpsertCheckRun(ctx, r.Event.Owner, r.Event.Repo, cr); err != nil {
+		return fmt.Errorf("write the check run for %s#%d: %w", repo, r.Event.PR, err)
+	}
+	r.Log.Info("check run written", "repo", repo, "pr", r.Event.PR,
+		"sha", pr.HeadSHA, "conclusion", cr.Conclusion, "actions", len(actions))
 	return nil
 }
+
+// rulesetBroken writes the neutral check run for a ruleset the plugin refused,
+// with one annotation per compiler diagnostic pinned to its line. It returns the
+// original failure, marked so failOpen does not write over the annotations with
+// a blank neutral check.
+func (r Runner) rulesetBroken(ctx context.Context, repo string, pr *github.PullRequest, ruleset string, cause error) error {
+	var diags []check.Diagnostic
+	resp, err := r.Cluster.ValidateRuleset(ctx, ruleset)
+	if err != nil {
+		// The refusal may not have been about the ruleset at all, or the cluster
+		// may have gone away in between. Either way the check run is still owed,
+		// just without positions.
+		r.Log.Warn("cannot get ruleset diagnostics", "repo", repo, "pr", r.Event.PR, "err", err)
+	} else {
+		for _, d := range resp.GetDiagnostics() {
+			if d.GetSeverity() != taloonerpb.Severity_SEVERITY_ERROR {
+				continue
+			}
+			diags = append(diags, check.Diagnostic{
+				Path:    RulesetPath,
+				Line:    int(d.GetLine()),
+				Column:  int(d.GetColumn()),
+				Message: d.GetMessage(),
+			})
+		}
+	}
+
+	cr := check.Broken(cause.Error(), diags)
+	cr.HeadSHA = pr.HeadSHA
+	if _, err := r.GitHub.UpsertCheckRun(ctx, r.Event.Owner, r.Event.Repo, cr); err != nil {
+		r.Log.Error("cannot write the neutral check run", "repo", repo, "pr", r.Event.PR, "err", err)
+	}
+	return reported{cause}
+}
+
+// failOpen writes the neutral check run for a run that broke after it had a head
+// sha, then returns the failure unchanged. The job still goes red — a broken run
+// is worth a maintainer's attention — but the check the branch protection reads
+// is neutral, and it replaces whatever the last run left at this sha.
+func (r Runner) failOpen(ctx context.Context, repo string, pr *github.PullRequest, cause error) error {
+	var already reported
+	if errors.As(cause, &already) {
+		return already.err // its check run is written, with better words on it
+	}
+
+	cr := check.Broken(cause.Error(), nil)
+	cr.HeadSHA = pr.HeadSHA
+	if _, err := r.GitHub.UpsertCheckRun(ctx, r.Event.Owner, r.Event.Repo, cr); err != nil {
+		// Two failures, and the first one is the interesting one.
+		r.Log.Error("cannot write the neutral check run", "repo", repo, "pr", r.Event.PR, "err", err)
+	}
+	return cause
+}
+
+// reported wraps a failure whose check run has already been written, so the
+// generic handler does not overwrite a specific verdict with a vague one.
+type reported struct{ err error }
+
+func (r reported) Error() string { return r.err.Error() }
+func (r reported) Unwrap() error { return r.err }
 
 // Main is the action entry point: build everything from the environment, run,
 // and turn the outcome into an exit code. 0 is success and every deliberate
