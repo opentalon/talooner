@@ -98,7 +98,7 @@ func (c *Client) UpsertComment(ctx context.Context, owner, repo string, number i
 		return 0, err
 	}
 
-	id, err := c.findComment(ctx, owner, repo, number, s.Marker)
+	id, _, err := c.findComment(ctx, owner, repo, number, s.Marker)
 	if err != nil {
 		return 0, err
 	}
@@ -152,19 +152,35 @@ func (c *Client) editComment(ctx context.Context, owner, repo string, id int64, 
 	return id, nil
 }
 
-// findComment returns the id of the oldest comment carrying marker, or 0 when
-// there is none.
-func (c *Client) findComment(ctx context.Context, owner, repo string, number int, marker string) (int64, error) {
+// CommentBody returns the body of the oldest comment carrying marker, or ""
+// when the topic has no comment on this pull request. It is how a topic that
+// carries state — the assignment ledger — reads back what the last run wrote,
+// and an absent comment is an empty state rather than an error.
+func (c *Client) CommentBody(ctx context.Context, owner, repo string, number int, marker string) (string, error) {
+	if number <= 0 {
+		return "", fmt.Errorf("pull request number must be positive, got %d", number)
+	}
+	if strings.TrimSpace(marker) == "" {
+		return "", errors.New("cannot look a comment up without a marker")
+	}
+	_, body, err := c.findComment(ctx, owner, repo, number, marker)
+	return body, err
+}
+
+// findComment returns the id and body of the oldest comment carrying marker, or
+// 0 and "" when there is none.
+func (c *Client) findComment(ctx context.Context, owner, repo string, number int, marker string) (int64, string, error) {
 	path, err := repoPath(owner, repo, "issues", fmt.Sprint(number), "comments")
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	comments, err := paginate[issueComment](ctx, c, path, nil)
 	if err != nil {
-		return 0, fmt.Errorf("list comments on %s/%s#%d: %w", owner, repo, number, err)
+		return 0, "", fmt.Errorf("list comments on %s/%s#%d: %w", owner, repo, number, err)
 	}
 
 	var id int64
+	var body string
 	var seen int
 	for _, cm := range comments {
 		if cm.ID == 0 || !strings.Contains(cm.Body, marker) {
@@ -172,7 +188,7 @@ func (c *Client) findComment(ctx context.Context, owner, repo string, number int
 		}
 		seen++
 		if id == 0 || cm.ID < id {
-			id = cm.ID
+			id, body = cm.ID, cm.Body
 		}
 	}
 	if seen > 1 {
@@ -182,5 +198,5 @@ func (c *Client) findComment(ctx context.Context, owner, repo string, number int
 		c.log.Warn("more than one comment carries the marker, editing the oldest",
 			"repo", owner+"/"+repo, "pr", number, "marker", marker, "count", seen, "id", id)
 	}
-	return id, nil
+	return id, body, nil
 }

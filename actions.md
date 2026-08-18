@@ -101,6 +101,19 @@ Facts retract; GitHub side effects mostly don't. Explicit per action:
 | `notify` | **no** | one-way; a sent Slack message stays sent |
 | `emit` | n/a | fact retraction only |
 
+Retracting `assign` and `require` needs one thing the others do not: knowing
+which of them are Talooner's. GitHub reports an assignee the bot added and one a
+maintainer added identically, so Talooner keeps a **ledger** of what it added, in
+a sticky comment of its own (`<!-- talooner:v1:state -->`), and takes back only
+what the ledger claims. A deleted or unreadable ledger therefore means Talooner
+owns nothing and removes nothing: the failure direction is a stale assignee,
+never one taken away from the person who put it there.
+
+Until `teams.yaml` lands (E1), a `require` target maps to GitHub by its own last
+segment — `review.security` is the team `security` in the repository's
+organisation, `review.@alice` is the user alice — and a target that resolves to
+neither fails the run by name rather than being skipped.
+
 So: a PR that was approved and then grows past 500 lines has its approval
 dismissed on the next run. This is why the bot re-derives all facts and
 re-evaluates from scratch on every event rather than applying deltas.
