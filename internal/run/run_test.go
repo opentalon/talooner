@@ -22,6 +22,7 @@ import (
 	"github.com/opentalon/talooner-plugin/proto/taloonerpb"
 
 	"github.com/opentalon/talooner/internal/action"
+	"github.com/opentalon/talooner/internal/check"
 	"github.com/opentalon/talooner/internal/cluster"
 	"github.com/opentalon/talooner/internal/command"
 	"github.com/opentalon/talooner/internal/event"
@@ -124,15 +125,38 @@ func dialFake(t *testing.T, f *fakeCluster) *cluster.Client {
 	return c
 }
 
-// fakeGitHub serves the four endpoints a run reads and records the paths hit.
+// fakeGitHub serves the endpoints a run touches and records the paths hit and
+// the check runs written.
 type fakeGitHub struct {
-	mu    sync.Mutex
-	paths []string
+	mu     sync.Mutex
+	paths  []string
+	checks []writtenCheck
 
 	permission string // the collaborator permission level to report
 	prStatus   int    // non-zero to fail the pull request fetch
 	noRuleset  bool
 	headSHA    string
+	checkFails bool // true to fail the check run write
+	failFiles  bool // true to fail the changed-files call, i.e. fact extraction
+	// checkRunID is the check run already at the sha; 0 means there is none.
+	checkRunID int64
+}
+
+// writtenCheck is one check run write as it reached GitHub.
+type writtenCheck struct {
+	created    bool
+	Name       string `json:"name"`
+	HeadSHA    string `json:"head_sha"`
+	Conclusion string `json:"conclusion"`
+	Output     struct {
+		Title       string `json:"title"`
+		Summary     string `json:"summary"`
+		Annotations []struct {
+			Path      string `json:"path"`
+			StartLine int    `json:"start_line"`
+			Message   string `json:"message"`
+		} `json:"annotations"`
+	} `json:"output"`
 }
 
 func (g *fakeGitHub) client(t *testing.T) *github.Client {
@@ -150,6 +174,29 @@ func (g *fakeGitHub) client(t *testing.T) *github.Client {
 		g.mu.Unlock()
 
 		switch {
+		case strings.HasSuffix(r.URL.Path, "/check-runs") && r.Method == http.MethodGet:
+			if g.checkRunID == 0 {
+				_, _ = fmt.Fprint(w, `{"total_count":0,"check_runs":[]}`)
+				return
+			}
+			_, _ = fmt.Fprintf(w, `{"total_count":1,"check_runs":[{"id":%d,"name":"talooner"}]}`, g.checkRunID)
+
+		case strings.Contains(r.URL.Path, "/check-runs"):
+			if g.checkFails {
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = fmt.Fprint(w, `{"message":"resource not accessible by integration"}`)
+				return
+			}
+			var got writtenCheck
+			if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+				t.Errorf("decode check run: %v", err)
+			}
+			got.created = r.Method == http.MethodPost
+			g.mu.Lock()
+			g.checks = append(g.checks, got)
+			g.mu.Unlock()
+			_, _ = fmt.Fprint(w, `{"id":991}`)
+
 		case strings.HasSuffix(r.URL.Path, "/permission"):
 			_, _ = fmt.Fprintf(w, `{"permission":%q}`, g.permission)
 
@@ -163,6 +210,11 @@ func (g *fakeGitHub) client(t *testing.T) *github.Client {
 				len(ruleset), base64.StdEncoding.EncodeToString([]byte(ruleset)))
 
 		case strings.HasSuffix(r.URL.Path, "/files"):
+			if g.failFiles {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = fmt.Fprint(w, `{"message":"boom"}`)
+				return
+			}
 			_, _ = fmt.Fprint(w, `[{"filename":"internal/auth/token.go"}]`)
 
 		default: // the pull request itself
@@ -201,6 +253,18 @@ func (g *fakeGitHub) hit(path string) bool {
 		}
 	}
 	return false
+}
+
+// check returns the one check run the run wrote, failing the test if it wrote
+// none or more than one.
+func (g *fakeGitHub) check(t *testing.T) writtenCheck {
+	t.Helper()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.checks) != 1 {
+		t.Fatalf("check runs written = %d, want exactly 1: %+v", len(g.checks), g.checks)
+	}
+	return g.checks[0]
 }
 
 func comment(body string) *event.Event {
@@ -275,6 +339,183 @@ func TestReviewCommandRunsTheWholeSpine(t *testing.T) {
 // A verdict this build cannot decode — an action with no verb, or one from a
 // newer cluster — fails the run. Logging it and carrying on would report success
 // for a decision that was never carried out.
+func TestBlockWritesAFailingCheckRun(t *testing.T) {
+	f := &fakeCluster{answers: evaluated(&taloonerpb.Action{
+		Verb: taloonerpb.Verb_VERB_BLOCK, Target: "pr.merge",
+	})}
+	gh := &fakeGitHub{}
+
+	if err := Run(t.Context(), Runner{Event: comment("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	got := gh.check(t)
+	if got.Conclusion != github.ConclusionFailure {
+		t.Errorf("conclusion = %q, want failure", got.Conclusion)
+	}
+	if got.Name != check.Name || got.HeadSHA != "abc123" {
+		t.Errorf("check run identity = %s@%s", got.Name, got.HeadSHA)
+	}
+	if !got.created {
+		t.Error("the first run at a sha creates the check run")
+	}
+}
+
+// The second run at a sha updates the first one's check run. Thirty pushes give
+// one talooner check, not thirty.
+func TestASecondRunUpdatesTheSameCheckRun(t *testing.T) {
+	f := &fakeCluster{answers: evaluated(&taloonerpb.Action{
+		Verb: taloonerpb.Verb_VERB_APPROVE, Target: "pr",
+	})}
+	gh := &fakeGitHub{checkRunID: 4242}
+
+	if err := Run(t.Context(), Runner{Event: comment("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	got := gh.check(t)
+	if got.created {
+		t.Fatal("a check run already exists at this sha; it must be updated, not duplicated")
+	}
+	if got.Conclusion != github.ConclusionSuccess {
+		t.Errorf("conclusion = %q, want success", got.Conclusion)
+	}
+}
+
+// No rule firing is a verdict too. Writing nothing would leave the previous
+// run's verdict standing at a sha it no longer describes.
+func TestNoActionsStillWritesACheckRun(t *testing.T) {
+	f := &fakeCluster{answers: evaluated()}
+	gh := &fakeGitHub{}
+
+	if err := Run(t.Context(), Runner{Event: comment("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := gh.check(t); got.Conclusion != github.ConclusionNeutral {
+		t.Errorf("conclusion = %q, want neutral", got.Conclusion)
+	}
+}
+
+// A repo that has not onboarded gets no check at all: a neutral talooner check
+// on a repo that never asked for one is noise.
+func TestMissingRulesetWritesNoCheckRun(t *testing.T) {
+	f := &fakeCluster{answers: evaluated()}
+	gh := &fakeGitHub{noRuleset: true}
+
+	if err := Run(t.Context(), Runner{Event: comment("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(gh.checks) != 0 {
+		t.Errorf("check runs written = %+v, want none", gh.checks)
+	}
+}
+
+// The hardest requirement of D2: Talooner's own faults are neutral. A repo that
+// marked the check required must not be blocked because the bot broke.
+func TestABrokenRunWritesNeutralNotFailure(t *testing.T) {
+	f := &fakeCluster{answers: evaluated(&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_UNSPECIFIED})}
+	gh := &fakeGitHub{}
+
+	err := Run(t.Context(), Runner{Event: comment("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)})
+	if !errors.Is(err, action.ErrUnknownVerb) {
+		t.Fatalf("Run returned %v, want action.ErrUnknownVerb: the job still goes red", err)
+	}
+	got := gh.check(t)
+	if got.Conclusion != github.ConclusionNeutral {
+		t.Fatalf("conclusion = %q, want neutral: a bot fault is not a policy outcome", got.Conclusion)
+	}
+	if !strings.Contains(got.Output.Summary, "unknown verb") {
+		t.Errorf("summary should name what broke:\n%s", got.Output.Summary)
+	}
+}
+
+// The same, one step earlier: a run that dies during extraction leaves a neutral
+// check where the last run's success was, not the success itself.
+func TestExtractionFailureLeavesNoStaleVerdict(t *testing.T) {
+	f := &fakeCluster{answers: evaluated()}
+	gh := &fakeGitHub{failFiles: true, checkRunID: 4242}
+
+	if err := Run(t.Context(), Runner{Event: comment("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err == nil {
+		t.Fatal("Run = nil, want the extraction failure")
+	}
+	got := gh.check(t)
+	if got.created {
+		t.Error("the existing check run must be updated, not duplicated")
+	}
+	if got.Conclusion != github.ConclusionNeutral {
+		t.Errorf("conclusion = %q, want neutral", got.Conclusion)
+	}
+}
+
+// A ruleset the plugin refuses is annotated at the line the compiler names, and
+// still neutral: a syntax error in the ruleset is the maintainer's to fix, not a
+// reason to block their merge.
+func TestBrokenRulesetIsAnnotatedAndNeutral(t *testing.T) {
+	f := &fakeCluster{
+		answers: map[string]proto.Message{
+			cluster.ActionSetSubscription: &taloonerpb.SetSubscriptionResponse{Subscribed: true},
+			cluster.ActionValidateRuleset: &taloonerpb.ValidateRulesetResponse{
+				Valid: false,
+				Diagnostics: []*taloonerpb.Diagnostic{
+					{Severity: taloonerpb.Severity_SEVERITY_ERROR, Message: `unexpected token "do"`, Line: 3, Column: 9},
+					{Severity: taloonerpb.Severity_SEVERITY_WARNING, Message: "rule never fires", Line: 11},
+				},
+			},
+		},
+		failures: map[string]string{cluster.ActionEvaluatePR: "talooner: evaluate ruleset: compile failed"},
+	}
+	gh := &fakeGitHub{}
+
+	if err := Run(t.Context(), Runner{Event: comment("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err == nil {
+		t.Fatal("Run = nil, want the plugin's refusal")
+	}
+	got := gh.check(t)
+	if got.Conclusion != github.ConclusionNeutral {
+		t.Fatalf("conclusion = %q, want neutral", got.Conclusion)
+	}
+	if len(got.Output.Annotations) != 1 {
+		t.Fatalf("annotations = %+v, want only the error one", got.Output.Annotations)
+	}
+	a := got.Output.Annotations[0]
+	if a.Path != RulesetPath || a.StartLine != 3 {
+		t.Errorf("annotation = %+v, want %s line 3", a, RulesetPath)
+	}
+	if !strings.Contains(a.Message, "unexpected token") || !strings.Contains(a.Message, "column 9") {
+		t.Errorf("annotation message = %q", a.Message)
+	}
+}
+
+// Diagnostics are a nicety; the neutral check run is not. A cluster that cannot
+// answer validate_ruleset still owes the PR a check.
+func TestBrokenRulesetWithNoDiagnosticsStillWritesTheCheck(t *testing.T) {
+	f := &fakeCluster{
+		answers:  map[string]proto.Message{cluster.ActionSetSubscription: &taloonerpb.SetSubscriptionResponse{Subscribed: true}},
+		failures: map[string]string{cluster.ActionEvaluatePR: "talooner: evaluate ruleset: compile failed"},
+	}
+	gh := &fakeGitHub{}
+
+	if err := Run(t.Context(), Runner{Event: comment("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err == nil {
+		t.Fatal("Run = nil, want the plugin's refusal")
+	}
+	got := gh.check(t)
+	if got.Conclusion != github.ConclusionNeutral || len(got.Output.Annotations) != 0 {
+		t.Errorf("check run = %+v, want a neutral one with no annotations", got)
+	}
+}
+
+// A check run that could not be written is not worth hiding the real failure
+// behind, but a decision that could not be published must still fail the run.
+func TestAnUnwritableCheckRunFailsTheRun(t *testing.T) {
+	f := &fakeCluster{answers: evaluated(&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_APPROVE, Target: "pr"})}
+	gh := &fakeGitHub{checkFails: true}
+
+	err := Run(t.Context(), Runner{Event: comment("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)})
+	if err == nil {
+		t.Fatal("Run = nil, want the failed check run write")
+	}
+	if !strings.Contains(err.Error(), "check run") {
+		t.Errorf("err = %v, want it to name the check run", err)
+	}
+}
+
 func TestUndecodableActionFailsTheRun(t *testing.T) {
 	f := &fakeCluster{answers: evaluated(
 		&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_BLOCK, Target: "pr.merge"},
