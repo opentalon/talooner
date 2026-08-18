@@ -164,6 +164,9 @@ type fakeGitHub struct {
 	ignored        []string
 	assigneeWrites []peopleWrite
 	reviewerWrites []peopleWrite
+
+	config      string // the tenant config.yaml body; "" means no file
+	configFails bool   // true to fail the config read with a 500
 }
 
 // peopleWrite is one assignee or review-request write as it reached GitHub.
@@ -370,6 +373,20 @@ func (g *fakeGitHub) client(t *testing.T) *github.Client {
 			}
 			_, _ = fmt.Fprintf(w, `{"type":"file","size":%d,"encoding":"base64","content":%q}`,
 				len(ruleset), base64.StdEncoding.EncodeToString([]byte(ruleset)))
+
+		case strings.HasSuffix(r.URL.Path, "/contents/.github/talooner/config.yaml"):
+			if g.configFails {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = fmt.Fprint(w, `{"message":"boom"}`)
+				return
+			}
+			if g.config == "" {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = fmt.Fprint(w, `{"message":"Not Found"}`)
+				return
+			}
+			_, _ = fmt.Fprintf(w, `{"type":"file","size":%d,"encoding":"base64","content":%q}`,
+				len(g.config), base64.StdEncoding.EncodeToString([]byte(g.config)))
 
 		case strings.HasSuffix(r.URL.Path, "/files"):
 			if g.failFiles {
@@ -590,6 +607,41 @@ func TestMissingRulesetWritesNoCheckRun(t *testing.T) {
 	if len(gh.checks) != 0 {
 		t.Errorf("check runs written = %+v, want none", gh.checks)
 	}
+}
+
+// C3 reads config.yaml from the base branch. A valid file is accepted; a
+// malformed one fails the run but still writes the neutral check, the same
+// fail-open shape as a broken ruleset (D2).
+func TestConfigRead(t *testing.T) {
+	t.Run("valid config is accepted", func(t *testing.T) {
+		f := &fakeCluster{answers: evaluated()}
+		gh := &fakeGitHub{config: "checks:\n  tests: [\"test\"]\n  lint: [\"lint\"]\n"}
+
+		if err := Run(t.Context(), Runner{
+			Event:   commentEvent("@talooner /review"),
+			GitHub:  gh.client(t),
+			Cluster: dialFake(t, f),
+		}); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	})
+
+	t.Run("malformed config fails the run, neutral", func(t *testing.T) {
+		f := &fakeCluster{answers: evaluated()}
+		gh := &fakeGitHub{config: "checks: [\n"}
+
+		err := Run(t.Context(), Runner{
+			Event:   commentEvent("@talooner /review"),
+			GitHub:  gh.client(t),
+			Cluster: dialFake(t, f),
+		})
+		if err == nil {
+			t.Fatal("Run = nil, want the config parse failure")
+		}
+		if got := gh.check(t); got.Conclusion != github.ConclusionNeutral {
+			t.Errorf("conclusion = %q, want neutral: a tenant config error is not a policy outcome", got.Conclusion)
+		}
+	})
 }
 
 // The hardest requirement of D2: Talooner's own faults are neutral. A repo that

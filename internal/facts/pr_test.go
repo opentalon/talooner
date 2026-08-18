@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/opentalon/talooner/internal/config"
 	"github.com/opentalon/talooner/internal/github"
 )
 
@@ -60,7 +61,7 @@ func samplePR() *github.PullRequest {
 func TestPRAssertsEveryCoreFact(t *testing.T) {
 	src := fakeSource{pr: samplePR(), files: []string{"internal/auth/token.go", "README.md"}, diff: "@@ -1 +1 @@\n+hello", trunc: false}
 
-	got, err := PR(context.Background(), src, "opentalon", "talooner", 42)
+	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{})
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -123,7 +124,7 @@ func TestPRHasDescription(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pr := samplePR()
 			pr.Body = tt.body
-			got, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42)
+			got, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42, config.Checks{})
 			if err != nil {
 				t.Fatalf("PR: %v", err)
 			}
@@ -147,7 +148,7 @@ func TestPRAssertsEmptyListsRatherThanOmittingThem(t *testing.T) {
 	pr.Labels = nil
 	pr.ChangedFiles = 0
 
-	got, err := PR(context.Background(), fakeSource{pr: pr, files: nil}, "opentalon", "talooner", 42)
+	got, err := PR(context.Background(), fakeSource{pr: pr, files: nil}, "opentalon", "talooner", 42, config.Checks{})
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -168,7 +169,7 @@ func TestPRForkIsCarriedThrough(t *testing.T) {
 	pr := samplePR()
 	pr.IsFork = true
 
-	got, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42)
+	got, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42, config.Checks{})
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -184,7 +185,7 @@ func TestPRCarriesEveryChangedFile(t *testing.T) {
 		paths[i] = fmt.Sprintf("pkg/file%03d.go", i)
 	}
 
-	got, err := PR(context.Background(), fakeSource{pr: samplePR(), files: paths}, "opentalon", "talooner", 42)
+	got, err := PR(context.Background(), fakeSource{pr: samplePR(), files: paths}, "opentalon", "talooner", 42, config.Checks{})
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -209,7 +210,7 @@ func TestPRReturnsNoPartialSetOnFailure(t *testing.T) {
 		{"diff fetch fails", fakeSource{pr: samplePR(), diffErr: boom}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := PR(context.Background(), tt.src, "opentalon", "talooner", 42)
+			got, err := PR(context.Background(), tt.src, "opentalon", "talooner", 42, config.Checks{})
 			if err == nil {
 				t.Fatal("err = nil, want the fetch failure")
 			}
@@ -227,7 +228,7 @@ func TestPRReturnsNoPartialSetOnFailure(t *testing.T) {
 // nil PR would be silently all-zero — every string empty, every count 0 — which
 // is the one failure mode this package exists to prevent.
 func TestPRRejectsAMissingPullRequest(t *testing.T) {
-	got, err := PR(context.Background(), fakeSource{}, "opentalon", "talooner", 42)
+	got, err := PR(context.Background(), fakeSource{}, "opentalon", "talooner", 42, config.Checks{})
 	if err == nil {
 		t.Fatal("err = nil, want a refusal to extract from a nil pull request")
 	}
@@ -252,7 +253,7 @@ func TestPRMergeableCarriedThrough(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pr := samplePR()
 			pr.Mergeable = tt.mergeable
-			got, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42)
+			got, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42, config.Checks{})
 			if err != nil {
 				t.Fatalf("PR: %v", err)
 			}
@@ -272,7 +273,7 @@ func TestPRMergeableCarriedThrough(t *testing.T) {
 func TestPRMergeableOmittedDoesNotReadAsFalse(t *testing.T) {
 	pr := samplePR()
 	pr.Mergeable = nil
-	got, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42)
+	got, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42, config.Checks{})
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -296,7 +297,7 @@ func TestPRChecksPending(t *testing.T) {
 		{"no CI at all", github.Checks{}, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := PR(context.Background(), fakeSource{pr: samplePR(), checks: tt.checks}, "opentalon", "talooner", 42)
+			got, err := PR(context.Background(), fakeSource{pr: samplePR(), checks: tt.checks}, "opentalon", "talooner", 42, config.Checks{})
 			if err != nil {
 				t.Fatalf("PR: %v", err)
 			}
@@ -323,7 +324,7 @@ func TestPRDiffAssertedWithTruncationFlag(t *testing.T) {
 		{"empty and complete", "", false, "", false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := PR(context.Background(), fakeSource{pr: samplePR(), diff: tt.diff, trunc: tt.trunc}, "opentalon", "talooner", 42)
+			got, err := PR(context.Background(), fakeSource{pr: samplePR(), diff: tt.diff, trunc: tt.trunc}, "opentalon", "talooner", 42, config.Checks{})
 			if err != nil {
 				t.Fatalf("PR: %v", err)
 			}
@@ -337,4 +338,136 @@ func TestPRDiffAssertedWithTruncationFlag(t *testing.T) {
 	}
 }
 
-func boolPtr(b bool) *bool { return &b }
+// derivePassing is the pass-gate the plugin's pr.tests_passing / pr.lint_passing
+// read. The table pins every branch: the cases that resolve to a value, and the
+// three that leave the fact deliberately unset (facts.md, "tests_passing /
+// lint_passing").
+func TestDerivePassing(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		runs     []github.CheckRunReport
+		statuses []github.CommitStatus
+		patterns []string
+		want     *bool
+	}{
+		{"no patterns", nil, nil, nil, nil},
+		{"no matching check",
+			[]github.CheckRunReport{{Name: "deploy", Status: "completed", Conclusion: "success"}},
+			nil, []string{"test"}, nil},
+		{"all matched success",
+			[]github.CheckRunReport{{Name: "test", Status: "completed", Conclusion: "success"}},
+			nil, []string{"test"}, boolPtr(true)},
+		{"matched failure",
+			[]github.CheckRunReport{{Name: "test", Status: "completed", Conclusion: "failure"}},
+			nil, []string{"test"}, boolPtr(false)},
+		{"matched timed_out",
+			[]github.CheckRunReport{{Name: "test", Status: "completed", Conclusion: "timed_out"}},
+			nil, []string{"test"}, boolPtr(false)},
+		{"matched cancelled",
+			[]github.CheckRunReport{{Name: "test", Status: "completed", Conclusion: "cancelled"}},
+			nil, []string{"test"}, boolPtr(false)},
+		{"matched still queued",
+			[]github.CheckRunReport{{Name: "test", Status: "queued"}},
+			nil, []string{"test"}, nil},
+		{"matched in_progress",
+			[]github.CheckRunReport{{Name: "test", Status: "in_progress"}},
+			nil, []string{"test"}, nil},
+		{"matched neutral is unknown, unset",
+			[]github.CheckRunReport{{Name: "test", Status: "completed", Conclusion: "neutral"}},
+			nil, []string{"test"}, nil},
+		{"matched skipped is unknown, unset",
+			[]github.CheckRunReport{{Name: "test", Status: "completed", Conclusion: "skipped"}},
+			nil, []string{"test"}, nil},
+		// Precedence: a recognised failure wins over an unknown conclusion, so a
+		// PR with one red test and one neutral test is not passing.
+		{"failure beats unknown",
+			[]github.CheckRunReport{
+				{Name: "test", Status: "completed", Conclusion: "failure"},
+				{Name: "test", Status: "completed", Conclusion: "neutral"},
+			}, nil, []string{"test"}, boolPtr(false)},
+		// Statuses (the older commit-status API) are matched too.
+		{"status success",
+			nil, []github.CommitStatus{{Context: "test", State: "success"}},
+			[]string{"test"}, boolPtr(true)},
+		{"status failure",
+			nil, []github.CommitStatus{{Context: "test", State: "failure"}},
+			[]string{"test"}, boolPtr(false)},
+		{"status error",
+			nil, []github.CommitStatus{{Context: "test", State: "error"}},
+			[]string{"test"}, boolPtr(false)},
+		{"status pending",
+			nil, []github.CommitStatus{{Context: "test", State: "pending"}},
+			[]string{"test"}, nil},
+		// A check outside the pattern does not count; a check inside does.
+		{"pattern ci/* matches across a slash",
+			[]github.CheckRunReport{{Name: "ci/build", Status: "completed", Conclusion: "success"}},
+			nil, []string{"ci/*"}, boolPtr(true)},
+		{"pattern *unit* substring",
+			[]github.CheckRunReport{{Name: "my-unit-tests", Status: "completed", Conclusion: "success"}},
+			nil, []string{"*unit*"}, boolPtr(true)},
+		{"case insensitive",
+			[]github.CheckRunReport{{Name: "Unit Tests", Status: "completed", Conclusion: "success"}},
+			nil, []string{"UNIT TESTS"}, boolPtr(true)},
+		// Two patterns, one matched failing, one matched passing: the failure
+		// wins.
+		{"mixed patterns, one fails",
+			[]github.CheckRunReport{
+				{Name: "test", Status: "completed", Conclusion: "success"},
+				{Name: "integration", Status: "completed", Conclusion: "failure"},
+			}, nil, []string{"test", "integration"}, boolPtr(false)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := derivePassing(tt.runs, tt.statuses, tt.patterns)
+			if (got == nil) != (tt.want == nil) {
+				t.Fatalf("derivePassing = %v, want %v", got, tt.want)
+			}
+			if got != nil && *got != *tt.want {
+				t.Errorf("derivePassing = %v, want %v", *got, *tt.want)
+			}
+		})
+	}
+}
+
+// pr.tests_passing and pr.lint_passing are asserted only when determined, and
+// read the same CI C8 fetched. The unset cases must be absent from the set, not
+// false — that is the whole point of the gate (facts.md, "Unset is false").
+func TestPRDerivesPassingFacts(t *testing.T) {
+	checks := github.Checks{
+		Runs: []github.CheckRunReport{
+			{Name: "test", Status: "completed", Conclusion: "success"},
+			{Name: "lint", Status: "completed", Conclusion: "failure"},
+		},
+	}
+	cfg := config.Checks{Tests: []string{"test"}, Lint: []string{"lint"}}
+
+	got, err := PR(context.Background(),
+		fakeSource{pr: samplePR(), checks: checks}, "opentalon", "talooner", 42, cfg)
+	if err != nil {
+		t.Fatalf("PR: %v", err)
+	}
+	if got["pr.tests_passing"] != true {
+		t.Errorf("pr.tests_passing = %v, want true", got["pr.tests_passing"])
+	}
+	if got["pr.lint_passing"] != false {
+		t.Errorf("pr.lint_passing = %v, want false", got["pr.lint_passing"])
+	}
+}
+
+func TestPRLeavesPassingFactsUnsetWithoutPatterns(t *testing.T) {
+	checks := github.Checks{
+		Runs: []github.CheckRunReport{{Name: "test", Status: "completed", Conclusion: "success"}},
+	}
+	// No patterns: the gate must not fire, so the fact is omitted rather than
+	// guessed true from unmatched CI.
+	got, err := PR(context.Background(),
+		fakeSource{pr: samplePR(), checks: checks}, "opentalon", "talooner", 42, config.Checks{})
+	if err != nil {
+		t.Fatalf("PR: %v", err)
+	}
+	if _, ok := got["pr.tests_passing"]; ok {
+		t.Error("pr.tests_passing asserted without patterns, want it omitted")
+	}
+	if _, ok := got["pr.lint_passing"]; ok {
+		t.Error("pr.lint_passing asserted without patterns, want it omitted")
+	}
+}

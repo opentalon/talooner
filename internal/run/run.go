@@ -42,6 +42,7 @@ import (
 	"github.com/opentalon/talooner/internal/cluster"
 	"github.com/opentalon/talooner/internal/command"
 	"github.com/opentalon/talooner/internal/comment"
+	"github.com/opentalon/talooner/internal/config"
 	"github.com/opentalon/talooner/internal/event"
 	"github.com/opentalon/talooner/internal/facts"
 	"github.com/opentalon/talooner/internal/github"
@@ -51,6 +52,12 @@ import (
 // RulesetPath is the tenant ruleset, read from the base branch. The rest of
 // .github/talooner/ — config.yaml, modules.yaml, teams.yaml — arrives with E1.
 const RulesetPath = ".github/talooner/rules.tln"
+
+// ConfigPath is the tenant's check-name patterns (C3), read from the base
+// branch alongside the ruleset. Missing is an answer (no patterns, so no
+// pr.tests_passing / pr.lint_passing); malformed is a tenant error that fails
+// the run.
+const ConfigPath = ".github/talooner/config.yaml"
 
 // Runner is one run's dependencies, already built and connected.
 type Runner struct {
@@ -172,7 +179,12 @@ func (r Runner) evaluate(ctx context.Context, repo string, pr *github.PullReques
 		return fmt.Errorf("load ruleset: %w", err)
 	}
 
-	set, err := facts.PR(ctx, r.GitHub, ev.Owner, ev.Repo, ev.PR)
+	cfg, err := r.loadConfig(ctx, ev.Owner, ev.Repo, pr.BaseRef)
+	if err != nil {
+		return err // missing is handled inside; this is a malformed config
+	}
+
+	set, err := facts.PR(ctx, r.GitHub, ev.Owner, ev.Repo, ev.PR, cfg.Checks)
 	if err != nil {
 		return err // already names the repo and PR, and is never partial
 	}
@@ -199,6 +211,28 @@ func (r Runner) evaluate(ctx context.Context, repo string, pr *github.PullReques
 	}
 
 	return r.report(ctx, repo, pr, resp)
+}
+
+// loadConfig reads the tenant's .github/talooner/config.yaml from the base
+// branch and parses its check-name patterns. A missing file is an answer — the
+// repo has no named checks, so pr.tests_passing / pr.lint_passing stay unset
+// rather than being guessed. A present but unparseable file is a tenant error
+// that fails the run, the same shape as a broken ruleset.
+func (r Runner) loadConfig(ctx context.Context, owner, repo, ref string) (config.Config, error) {
+	data, err := r.GitHub.FileContent(ctx, owner, repo, ConfigPath, ref)
+	if errors.Is(err, github.ErrNotFound) {
+		r.Log.Info("no config on the base branch, no check patterns",
+			"repo", owner+"/"+repo, "path", ConfigPath, "ref", ref)
+		return config.Config{}, nil
+	}
+	if err != nil {
+		return config.Config{}, fmt.Errorf("load config %s from %s/%s@%s: %w", ConfigPath, owner, repo, ref, err)
+	}
+	cfg, err := config.Parse(data)
+	if err != nil {
+		return config.Config{}, fmt.Errorf("parse config %s from %s/%s@%s: %w", ConfigPath, owner, repo, ref, err)
+	}
+	return cfg, nil
 }
 
 // gate parses the command in a comment and checks the commander's access. It
