@@ -15,9 +15,10 @@ instead of it.
 Self-hosted, permanently. You run an OpenTalon cluster on your own VPS with your
 own LLM credentials. There is no hosted tier and no plan for one.
 
-> **Status: design phase.** This repo currently contains design documents only —
-> no code, no binary, nothing runnable. Everything here is subject to change
-> until the walking skeleton lands. See the
+> **Status: early v1.** The walking skeleton runs end to end — event, command
+> gate, subscription, base-branch ruleset, `pr.*` facts, `evaluate_pr` — but the
+> decision is only logged: nothing is written back to GitHub yet, and most of the
+> fact set is still to come. Not usable on a real repo. See the
 > [v1 milestone](https://github.com/opentalon/talooner/milestone/1).
 
 ## Example
