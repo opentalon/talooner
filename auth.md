@@ -108,13 +108,19 @@ private network.
 On connect:
 
 ```
-whoami() → {
-  tenant_id, tenant_name,
-  quota:   {llm_calls_remaining, budget_remaining, period_resets_at},
-  models:  [enabled model ids],
-  features:[llm_review, dispatch, ...]
+whoami() → WhoamiResponse {
+  tenant:           tenant name
+  protocol_version: contract version the cluster speaks
+  models:           [enabled model ids]
+  features:         [llm_review, ...]
+  quota:            {llm_calls_used, llm_calls_limit}
 }
 ```
+
+That is the wire shape, from `talooner-plugin/proto/talooner/v1/talooner.proto`
+— the generated package is the contract, and this sketch is a copy that has
+already drifted once. The API key travels in the `api_key` arg and the caller
+declares its own version in `protocol_version`; neither is an action parameter.
 
 `whoami` is the capability handshake, not just an identity check. The bot uses
 it to know whether `llm_review` is even available before loading a ruleset that
