@@ -24,6 +24,12 @@ runs:
   # `uses: opentalon/talooner@<sha>` resolves to exactly one image forever;
   # on main it tracks the floating v1 tag.
   image: docker://ghcr.io/opentalon/talooner:v1
+  # The entrypoint reads these three from the environment; a docker action
+  # otherwise only sees inputs as INPUT_*.
+  env:
+    OPENTALON_HOST: ${{ inputs.opentalon_host }}
+    OPENTALON_API_KEY: ${{ inputs.opentalon_api_key }}
+    GITHUB_TOKEN: ${{ inputs.github_token }}
 
 branding:
   icon: check-circle
