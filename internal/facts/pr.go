@@ -36,8 +36,12 @@ func PR(ctx context.Context, src Source, owner, repo string, number int) (Set, e
 		err error
 	}
 	prCh := make(chan prResult, 1)
+	// resolveCtx is cancelled when PR returns on any path, so the poll goroutine
+	// stops burning API quota once ChangedFiles or CommitChecks fails.
+	resolveCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	go func() {
-		pr, err := src.ResolveMergeable(ctx, owner, repo, number)
+		pr, err := src.ResolveMergeable(resolveCtx, owner, repo, number)
 		prCh <- prResult{pr, err}
 	}()
 
