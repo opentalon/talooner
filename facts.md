@@ -50,7 +50,10 @@ with a one-comment "no ruleset found" and does nothing else.
 
 ## Built-in `pr.*` facts
 
-Pure functions of the PR at a given head sha. Always asserted, never absent.
+Pure functions of the PR at a given head sha. Always asserted, never absent —
+with the single deliberate exception of `pr.mergeable`, which GitHub computes
+asynchronously and which is omitted rather than guessed while it is still `null`
+(see below).
 
 | Fact | Type | Source |
 |---|---|---|
@@ -67,10 +70,39 @@ Pure functions of the PR at a given head sha. Always asserted, never absent.
 | `pr.changed_files` | list\<string\> | Files API, paginated |
 | `pr.commits` | int | payload |
 | `pr.labels` | list\<string\> | payload |
+| `pr.mergeable` | bool | payload — see below |
+| `pr.checks_pending` | bool | check runs + statuses — see below |
 | `pr.tests_passing` | bool | check runs — see below |
 | `pr.lint_passing` | bool | check runs — see below |
 | `pr.diff` | string (ref) | Files API patches, size-capped |
 | `pr.new_dependencies` | int | manifest diff — see below |
+
+### `pr.mergeable` and `pr.checks_pending`
+
+These two are the **only** attributes the plugin's `strict` base ruleset matches
+(`talooner-plugin/internal/ruleset/base/talooner.tln`): `pr.mergeable == false`
+blocks on unresolved conflicts, `pr.checks_pending == true` blocks while required
+checks are still running. The next person to prune an unused fact should find
+that out here, not from a PR getting approved over a merge conflict.
+
+- `pr.mergeable` is GitHub's `mergeable` field. **It is nullable, and that is
+  the whole decision.** GitHub computes mergeability asynchronously and returns
+  `null` on a PR whose background job has not finished — the common case right
+  after a push, which is when a run fires. The bot polls the PR endpoint a
+  bounded number of times (`ResolveMergeable`); what is still `null` past that
+  budget is **omitted, not asserted false**. "We do not know yet" is not "there
+  are conflicts", and asserting `false` there would block a clean PR. Both base
+  rules are positive conditions, so an omitted `pr.mergeable` simply does not
+  fire — the strict floor stays inert on exactly the PRs it exists for. This is
+  the one built-in fact that may be absent, on purpose.
+- `pr.checks_pending` is derived, not a payload field: `true` when any check run
+  on the head sha is `queued`/`in_progress` **or** any commit status is
+  `pending`. It is asserted `false` explicitly when everything has settled — a PR
+  with zero check runs and zero statuses is a settled PR, not an unknown one.
+  Unlike C3's `tests_passing`/`lint_passing` it is not filtered by the tenant's
+  check patterns: a pending check nobody named is still a pending check, and the
+  base rule is about not reviewing a moving target. It shares C3's check-run
+  fetch; whichever landed first owns the API call, and this is the one.
 
 ### `tests_passing` / `lint_passing`
 

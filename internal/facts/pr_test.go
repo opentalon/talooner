@@ -10,20 +10,26 @@ import (
 )
 
 // fakeSource stands in for *github.Client. The extractor is a pure function of
-// two API responses, so there is nothing here worth an httptest server.
+// the API responses, so there is nothing here worth an httptest server.
 type fakeSource struct {
-	pr      *github.PullRequest
-	prErr   error
-	files   []string
-	fileErr error
+	pr       *github.PullRequest
+	prErr    error
+	files    []string
+	fileErr  error
+	checks   github.Checks
+	checkErr error
 }
 
-func (f fakeSource) PullRequest(_ context.Context, _, _ string, _ int) (*github.PullRequest, error) {
+func (f fakeSource) ResolveMergeable(_ context.Context, _, _ string, _ int) (*github.PullRequest, error) {
 	return f.pr, f.prErr
 }
 
 func (f fakeSource) ChangedFiles(_ context.Context, _, _ string, _ int) ([]string, error) {
 	return f.files, f.fileErr
+}
+
+func (f fakeSource) CommitChecks(_ context.Context, _, _, _ string) (github.Checks, error) {
+	return f.checks, f.checkErr
 }
 
 func samplePR() *github.PullRequest {
@@ -84,9 +90,12 @@ func TestPRAssertsEveryCoreFact(t *testing.T) {
 	}
 
 	// A fact this package forgot is a fact that reads as a dead extractor, so
-	// the count is pinned rather than left to the loop above.
-	if len(got) != len(want)+2 {
-		t.Errorf("asserted %d facts, want %d", len(got), len(want)+2)
+	// the count is pinned rather than left to the loop above. checks_pending is
+	// always asserted (false here: an empty CI is a settled CI); mergeable is
+	// not, because samplePR has none and it is the one fact that may legitimately
+	// be omitted (pr_mergeable test below).
+	if len(got) != len(want)+3 {
+		t.Errorf("asserted %d facts, want %d", len(got), len(want)+3)
 	}
 }
 
@@ -186,6 +195,7 @@ func TestPRReturnsNoPartialSetOnFailure(t *testing.T) {
 	}{
 		{"pull request fetch fails", fakeSource{prErr: boom}},
 		{"changed files fetch fails", fakeSource{pr: samplePR(), fileErr: boom}},
+		{"checks fetch fails", fakeSource{pr: samplePR(), checkErr: boom}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := PR(context.Background(), tt.src, "opentalon", "talooner", 42)
@@ -214,3 +224,76 @@ func TestPRRejectsAMissingPullRequest(t *testing.T) {
 		t.Errorf("facts = %v, want nil", got)
 	}
 }
+
+// pr.mergeable is the one fact that is omitted rather than asserted: nil means
+// GitHub's background job has not computed it, which is "we do not know", not
+// "there are conflicts". Asserting false there would block a clean PR.
+func TestPRMergeableCarriedThrough(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		mergeable *bool
+		present   bool
+	}{
+		{"mergeable", boolPtr(true), true},
+		{"unmergeable", boolPtr(false), true},
+		{"unknown, omitted", nil, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			pr := samplePR()
+			pr.Mergeable = tt.mergeable
+			got, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42)
+			if err != nil {
+				t.Fatalf("PR: %v", err)
+			}
+			v, ok := got["pr.mergeable"]
+			if ok != tt.present {
+				t.Errorf("pr.mergeable present = %v, want %v", ok, tt.present)
+			}
+			if tt.present && v != *tt.mergeable {
+				t.Errorf("pr.mergeable = %v, want %v", v, *tt.mergeable)
+			}
+		})
+	}
+}
+
+// An unknown mergeable must not read as false to a not-shaped rule, which is the
+// one way this omission could turn into a wrong approval.
+func TestPRMergeableOmittedDoesNotReadAsFalse(t *testing.T) {
+	pr := samplePR()
+	pr.Mergeable = nil
+	got, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42)
+	if err != nil {
+		t.Fatalf("PR: %v", err)
+	}
+	if _, ok := got["pr.mergeable"]; ok {
+		t.Error("pr.mergeable asserted when unknown, want it omitted")
+	}
+}
+
+// checks_pending is derived from the whole round of CI on the head sha, and is
+// asserted either way — an empty CI is settled, not an unknown one.
+func TestPRChecksPending(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		checks github.Checks
+		want   bool
+	}{
+		{"queued check run", github.Checks{Runs: []github.CheckRunReport{{Status: "queued"}}}, true},
+		{"in_progress check run", github.Checks{Runs: []github.CheckRunReport{{Status: "in_progress"}}}, true},
+		{"pending status", github.Checks{Statuses: []github.CommitStatus{{State: "pending"}}}, true},
+		{"everything settled", github.Checks{Runs: []github.CheckRunReport{{Status: "completed", Conclusion: "success"}}, Statuses: []github.CommitStatus{{State: "success"}}}, false},
+		{"no CI at all", github.Checks{}, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := PR(context.Background(), fakeSource{pr: samplePR(), checks: tt.checks}, "opentalon", "talooner", 42)
+			if err != nil {
+				t.Fatalf("PR: %v", err)
+			}
+			if got["pr.checks_pending"] != tt.want {
+				t.Errorf("pr.checks_pending = %v, want %v", got["pr.checks_pending"], tt.want)
+			}
+		})
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }

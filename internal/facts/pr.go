@@ -10,29 +10,56 @@ import (
 
 // Source is the part of *github.Client that pr.* extraction needs.
 type Source interface {
-	PullRequest(ctx context.Context, owner, repo string, number int) (*github.PullRequest, error)
+	// ResolveMergeable is the PR with mergeable resolved to a bounded poll:
+	// GitHub computes mergeability asynchronously and returns null until it has,
+	// so the client re-fetches while null rather than handing the extractor a
+	// fact it must guess. Mergeable stays nil for a closed or merged PR, which
+	// never resolves.
+	ResolveMergeable(ctx context.Context, owner, repo string, number int) (*github.PullRequest, error)
 	ChangedFiles(ctx context.Context, owner, repo string, number int) ([]string, error)
+	CommitChecks(ctx context.Context, owner, repo, headSHA string) (github.Checks, error)
 }
 
 // PR extracts the built-in pr.* facts (facts.md, "Built-in pr.* facts"). They
 // are a pure function of the PR at its head sha, so a run re-extracts rather
 // than caching.
 //
-// Two API calls, both required: the PR itself and its full file list. Either
-// failing fails the whole extraction — see the package comment for why a
-// partial set is the dangerous outcome.
+// Four API calls, all required. ResolveMergeable can poll for several seconds
+// while GitHub's mergeability job is still running, so it runs alongside
+// ChangedFiles rather than blocking it; CommitChecks needs the head sha
+// ResolveMergeable returns, so it fires once that settles. Any fetch failing
+// fails the whole extraction — see the package comment for why a partial set
+// is the dangerous outcome.
 func PR(ctx context.Context, src Source, owner, repo string, number int) (Set, error) {
-	pr, err := src.PullRequest(ctx, owner, repo, number)
-	if err != nil {
-		return nil, fmt.Errorf("extract pr.* facts for %s/%s#%d: %w", owner, repo, number, err)
+	type prResult struct {
+		pr  *github.PullRequest
+		err error
 	}
-	if pr == nil {
-		return nil, fmt.Errorf("extract pr.* facts for %s/%s#%d: no pull request returned", owner, repo, number)
-	}
+	prCh := make(chan prResult, 1)
+	go func() {
+		pr, err := src.ResolveMergeable(ctx, owner, repo, number)
+		prCh <- prResult{pr, err}
+	}()
 
 	changed, err := src.ChangedFiles(ctx, owner, repo, number)
 	if err != nil {
 		return nil, fmt.Errorf("extract pr.changed_files for %s/%s#%d: %w", owner, repo, number, err)
+	}
+
+	res := <-prCh
+	if res.err != nil {
+		return nil, fmt.Errorf("extract pr.* facts for %s/%s#%d: %w", owner, repo, number, res.err)
+	}
+	pr := res.pr
+	if pr == nil {
+		return nil, fmt.Errorf("extract pr.* facts for %s/%s#%d: no pull request returned", owner, repo, number)
+	}
+
+	// checks_pending is derived from the whole round of CI on the head sha, both
+	// check runs and commit statuses — a repo can use either, or neither.
+	checks, err := src.CommitChecks(ctx, owner, repo, pr.HeadSHA)
+	if err != nil {
+		return nil, fmt.Errorf("extract pr.checks_pending for %s/%s#%d: %w", owner, repo, number, err)
 	}
 
 	s := New()
@@ -52,5 +79,14 @@ func PR(ctx context.Context, src Source, owner, repo string, number int) (Set, e
 	s.Int("pr.commits", pr.Commits)
 	s.Strings("pr.changed_files", changed)
 	s.Strings("pr.labels", pr.Labels)
+	s.Bool("pr.checks_pending", checks.Pending())
+	// mergeable is the one fact GitHub computes asynchronously and returns null
+	// for until it has — the common case right after a push, which is when a run
+	// fires. A nil here is "GitHub has not said yet", which is omitted rather
+	// than asserted false: "we do not know" is not "there are conflicts"
+	// (facts.md, "pr.mergeable").
+	if pr.Mergeable != nil {
+		s.Bool("pr.mergeable", *pr.Mergeable)
+	}
 	return s, nil
 }

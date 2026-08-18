@@ -379,6 +379,12 @@ func (g *fakeGitHub) client(t *testing.T) *github.Client {
 			}
 			_, _ = fmt.Fprint(w, `[{"filename":"internal/auth/token.go"}]`)
 
+		case strings.HasSuffix(r.URL.Path, "/status"):
+			_, _ = fmt.Fprint(w, `{"state":"success","total_count":0,"statuses":[]}`)
+
+		case strings.HasSuffix(r.URL.Path, "/check-runs"):
+			_, _ = fmt.Fprint(w, `{"total_count":0,"check_runs":[]}`)
+
 		default: // the pull request itself
 			if g.prStatus != 0 {
 				w.WriteHeader(g.prStatus)
@@ -393,7 +399,7 @@ func (g *fakeGitHub) client(t *testing.T) *github.Client {
 				"head": {"sha": %q, "ref": "feat/x", "repo": {"full_name": "opentalon/talooner"}},
 				"base": {"sha": "def456", "ref": "master", "repo": {"full_name": "opentalon/talooner"}},
 				"user": {"login": "evgeny"},
-				"title": "Add a thing", "body": "", "state": "open",
+				"title": "Add a thing", "body": "", "state": "open", "mergeable": true,
 				"additions": 10, "deletions": 3, "changed_files": 1, "commits": 2,
 				"assignees": %s, "requested_reviewers": %s, "requested_teams": %s
 			}`, g.headSHA, assignees, users, teams)

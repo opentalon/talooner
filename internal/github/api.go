@@ -9,6 +9,13 @@ import (
 	"strings"
 )
 
+// mergeablePollAttempts bounds how many times ResolveMergeable re-fetches the
+// PR after the first fetch, while GitHub's background job computes
+// mergeability — mergeablePollAttempts+1 GETs in total. GitHub usually
+// resolves it within a couple of seconds; past this the fact is omitted rather
+// than guessed (facts.md, "pr.mergeable").
+const mergeablePollAttempts = 5
+
 // PullRequest is the part of a PR that facts are built from (facts.md,
 // "pr.*"). Everything here comes from one GET, which is also how an
 // issue_comment run learns its head sha — that payload carries none.
@@ -30,6 +37,11 @@ type PullRequest struct {
 	ChangedFiles int
 	Commits      int
 	Labels       []string
+	// Mergeable is what GitHub's asynchronous mergeability job has computed.
+	// nil means the API answered null — either the job has not finished, which
+	// is the common case right after a push, or the PR is closed/merged and it
+	// never will (facts.md, "pr.mergeable").
+	Mergeable *bool
 	// Assignees and Requested are the state internal/assignment reconciles
 	// against: who is assigned, and which review requests are standing. They come
 	// from this same GET rather than from calls of their own, so a run reads them
@@ -62,6 +74,7 @@ type pullRequestPayload struct {
 	State        string `json:"state"`
 	Draft        bool   `json:"draft"`
 	Merged       bool   `json:"merged"`
+	Mergeable    *bool  `json:"mergeable"`
 	Additions    int    `json:"additions"`
 	Deletions    int    `json:"deletions"`
 	ChangedFiles int    `json:"changed_files"`
@@ -102,6 +115,7 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, number int
 		State:        p.State,
 		Draft:        p.Draft,
 		Merged:       p.Merged,
+		Mergeable:    p.Mergeable,
 		Additions:    p.Additions,
 		Deletions:    p.Deletions,
 		ChangedFiles: p.ChangedFiles,
@@ -122,6 +136,31 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, number int
 	// as a fork — the cautious way round for a fact that gates secrets.
 	pr.IsFork = p.Head.Repo == nil || p.Base.Repo == nil || p.Head.Repo.FullName != p.Base.Repo.FullName
 	return pr, nil
+}
+
+// ResolveMergeable fetches the PR and, while GitHub's asynchronous mergeability
+// job has not answered (mergeable: null on an open PR), re-fetches it a bounded
+// number of times. It returns the PR once mergeable resolves. A closed or merged
+// PR never resolves — GitHub leaves mergeable null on those — so it returns as-is
+// rather than burning the budget. This is the one fact that may come back
+// unresolved (facts.md, "pr.mergeable"), which is why it lives apart from
+// PullRequest instead of slowing that call for callers that only need the sha.
+func (c *Client) ResolveMergeable(ctx context.Context, owner, repo string, number int) (*PullRequest, error) {
+	for attempt := 0; ; attempt++ {
+		pr, err := c.PullRequest(ctx, owner, repo, number)
+		if err != nil {
+			return nil, err
+		}
+		if pr.Mergeable != nil || pr.State != "open" || pr.Merged {
+			return pr, nil
+		}
+		if attempt >= mergeablePollAttempts {
+			return pr, nil // still unknown; the extractor omits pr.mergeable
+		}
+		if err := c.sleep(ctx, c.backoff(attempt)); err != nil {
+			return nil, fmt.Errorf("wait to resolve mergeability of %s/%s#%d: %w", owner, repo, number, err)
+		}
+	}
 }
 
 // ChangedFiles lists every path the PR touches, following pagination to the end.
