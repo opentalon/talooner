@@ -242,6 +242,30 @@ Resolution order for `user.owner`, first hit wins:
    "escalate to the owner" silently escalate to the person who wrote the change,
    which is exactly the wrong answer and is invisible when it happens.
 
+### Implemented in v1 (C5)
+
+`user.author` is always asserted (an alias of `pr.author`, for symmetry).
+`user.reviewer` is asserted when the PR has a standing review request: the first
+requested user login, else the first requested team slug; left unset when nothing
+is requested. `user.owner` and `user.owners` are resolved from CODEOWNERS
+(tier 1) against the changed paths — the last matching rule wins per GitHub, and
+`user.owners` is the sorted, de-duplicated union across every touched path;
+`user.owner` is the first owner of the first touched path CODEOWNERS assigns.
+
+CODEOWNERS is read from the **base** branch at its own ref, like the ruleset and
+config (architecture.md, "Fork safety") — a fork PR cannot name its own owners.
+The three locations GitHub consults (`.github/CODEOWNERS`, `CODEOWNERS`,
+`docs/CODEOWNERS`) are tried in priority order; a repo with none leaves
+`user.owner` / `user.owners` unset.
+
+Tiers 2 (`modules.yaml`) and 3 (`git log` last-toucher) are **not** implemented
+in v1 — they are C6/E1's loaders. A path CODEOWNERS does not cover therefore
+leaves `user.owner` / `user.owners` **unset** rather than guessed at `pr.author`:
+the extractor does not pretend to know the owner. `user.last_toucher` is likewise
+not asserted yet. These gaps are safe under "Unset is false" — a rule gated on
+`attr "user.owner" == ...` simply does not fire for a path CODEOWNERS ignores,
+which is the same quiet non-match as a repo with no CODEOWNERS at all.
+
 ```yaml
 # .github/talooner/modules.yaml
 - path: internal/auth/

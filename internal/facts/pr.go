@@ -42,7 +42,14 @@ type Source interface {
 // lint_passing"): pr.tests_passing and pr.lint_passing are derived from it, so
 // the two facts cost no extra API call. An empty pattern list leaves the
 // matching fact unset rather than guessing.
-func PR(ctx context.Context, src Source, owner, repo string, number int, checks config.Checks) (Set, error) {
+//
+// codeowners is the repo's CODEOWNERS file, read from the base branch at its own
+// ref (facts.md, "user.owner"); it is nil when the repo has none. user.owner and
+// user.owners are derived from it against the changed paths — the first tier of
+// the owner resolution order. The modules.yaml and git-history tiers are later
+// tickets, so a path CODEOWNERS does not cover is left unowned rather than
+// guessed (see resolveOwners).
+func PR(ctx context.Context, src Source, owner, repo string, number int, checks config.Checks, codeowners []byte) (Set, error) {
 	type prResult struct {
 		pr  *github.PullRequest
 		err error
@@ -135,7 +142,43 @@ func PR(ctx context.Context, src Source, owner, repo string, number int, checks 
 	if v := derivePassing(ci.Runs, ci.Statuses, checks.Lint); v != nil {
 		s.Bool("pr.lint_passing", *v)
 	}
+
+	// user.* facts (facts.md, "user.*"): user.author is pr.author for symmetry,
+	// user.reviewer the standing review request, user.owner / user.owners the
+	// CODEOWNERS-derived ownership. All read data already fetched here; the
+	// CODEOWNERS content is passed in rather than re-read.
+	userFacts(s, pr, changed, codeowners)
 	return s, nil
+}
+
+// userFacts asserts the user.* namespace (facts.md, "user.*") into s.
+func userFacts(s Set, pr *github.PullRequest, changed []string, codeowners []byte) {
+	// user.author aliases pr.author for symmetry. Always asserted: a rule quoting
+	// user.author on a PR with no author is not a real case, but an omitted fact
+	// there would read as a dead extractor (facts.md, "Unset is false").
+	s.String("user.author", pr.Author)
+
+	// user.reviewer is the one standing review request, if any. The PR carries
+	// users and teams separately; a user login is preferred, then a team slug,
+	// because a rule that tags the reviewer wants a person when one is asked. Left
+	// unset when nothing is requested — that is the honest answer, not "".
+	if r := pr.Requested.Users; len(r) > 0 {
+		s.String("user.reviewer", r[0])
+	} else if t := pr.Requested.Teams; len(t) > 0 {
+		s.String("user.reviewer", t[0])
+	}
+
+	// user.owner / user.owners come from CODEOWNERS, the first tier of the owner
+	// resolution order (facts.md). A repo without CODEOWNERS, or one whose
+	// CODEOWNERS names no owner for any touched path, leaves both facts unset
+	// rather than guessed at pr.author — the modules.yaml and git-history tiers
+	// are later tickets.
+	if len(codeowners) > 0 {
+		if primary, owners := resolveOwners(parseCodeowners(codeowners), changed); owners != nil {
+			s.String("user.owner", primary)
+			s.Strings("user.owners", owners)
+		}
+	}
 }
 
 // derivePassing turns the head sha's CI into one pass-gate fact for a set of
