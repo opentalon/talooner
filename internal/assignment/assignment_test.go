@@ -8,6 +8,7 @@ import (
 
 	"github.com/opentalon/talooner/internal/action"
 	"github.com/opentalon/talooner/internal/comment"
+	"github.com/opentalon/talooner/internal/config"
 	"github.com/opentalon/talooner/internal/github"
 )
 
@@ -132,7 +133,7 @@ func require(target string) action.Action {
 
 func sync(t *testing.T, f *fakeGitHub, author string, actions ...action.Action) error {
 	t.Helper()
-	s, err := New(f, "opentalon", "talooner", 42, f.pr(author), actions, nil)
+	s, err := New(f, "opentalon", "talooner", 42, f.pr(author), actions, nil, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -355,7 +356,7 @@ func TestAFailedWriteIsReportedAndNotRecorded(t *testing.T) {
 func TestSyncHappensOnceHoweverManyVerbsFired(t *testing.T) {
 	f := &fakeGitHub{}
 	s, err := New(f, "opentalon", "talooner", 42, f.pr("evgeny"),
-		[]action.Action{assign("alice"), require("review.security")}, nil)
+		[]action.Action{assign("alice"), require("review.security")}, nil, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -383,7 +384,7 @@ func TestSyncHappensOnceHoweverManyVerbsFired(t *testing.T) {
 
 func TestExecuteRefusesAVerbItDoesNotPerform(t *testing.T) {
 	f := &fakeGitHub{}
-	s, err := New(f, "opentalon", "talooner", 42, f.pr("evgeny"), nil, nil)
+	s, err := New(f, "opentalon", "talooner", 42, f.pr("evgeny"), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -444,7 +445,44 @@ func TestResolveReviewer(t *testing.T) {
 		{raw: "review.a-->b", bad: true},
 	} {
 		t.Run(tc.raw, func(t *testing.T) {
-			got, err := ResolveReviewer(tc.raw)
+			got, err := ResolveReviewer(tc.raw, nil)
+			if tc.bad {
+				if !errors.Is(err, ErrTarget) {
+					t.Fatalf("ResolveReviewer(%q) = %+v, %v, want ErrTarget", tc.raw, got, err)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Errorf("ResolveReviewer(%q) = %+v, %v, want %+v", tc.raw, got, err, tc.want)
+			}
+		})
+	}
+}
+
+// teams.yaml sits in front of the path-derived target. A ruleset that names
+// review.senior_oncall resolves to whatever the repo mapped it to, not to a team
+// slug "senior_oncall"; the mapped value is trusted repo config, so a team in
+// another org ("@org/payments") is honoured, and review.@alice still means the
+// user. A target absent from the map falls back to the existing path-derived
+// rule.
+func TestResolveReviewerTeams(t *testing.T) {
+	teams := config.Teams{
+		"senior_oncall": "@org/security",
+		"payments":      "@org/payments",
+	}
+	for _, tc := range []struct {
+		raw  string
+		want Target
+		bad  bool
+	}{
+		{raw: "review.senior_oncall", want: Target{Name: "org/security", Team: true}},
+		{raw: "review.payments", want: Target{Name: "org/payments", Team: true}},
+		{raw: "review.@alice", want: Target{Name: "alice"}},
+		{raw: "review.security", want: Target{Name: "security", Team: true}}, // not in map, falls back
+		{raw: "review.foo.bar", bad: true},
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			got, err := ResolveReviewer(tc.raw, teams)
 			if tc.bad {
 				if !errors.Is(err, ErrTarget) {
 					t.Fatalf("ResolveReviewer(%q) = %+v, %v, want ErrTarget", tc.raw, got, err)
@@ -463,7 +501,7 @@ func TestResolveReviewer(t *testing.T) {
 func TestAnUnresolvableTargetFailsBeforeAnyWrite(t *testing.T) {
 	f := &fakeGitHub{}
 
-	_, err := New(f, "opentalon", "talooner", 42, f.pr("evgeny"), []action.Action{require("review.foo.bar")}, nil)
+	_, err := New(f, "opentalon", "talooner", 42, f.pr("evgeny"), []action.Action{require("review.foo.bar")}, nil, nil)
 	if !errors.Is(err, ErrTarget) {
 		t.Fatalf("New = %v, want ErrTarget", err)
 	}
@@ -473,7 +511,7 @@ func TestAnUnresolvableTargetFailsBeforeAnyWrite(t *testing.T) {
 }
 
 func TestNewNeedsThePullRequest(t *testing.T) {
-	if _, err := New(&fakeGitHub{}, "opentalon", "talooner", 42, nil, nil, nil); err == nil {
+	if _, err := New(&fakeGitHub{}, "opentalon", "talooner", 42, nil, nil, nil, nil); err == nil {
 		t.Error("New = nil, want the missing pull request to be an error")
 	}
 }

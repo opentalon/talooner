@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/opentalon/talooner/internal/config"
@@ -13,23 +14,31 @@ import (
 // fakeSource stands in for *github.Client. The extractor is a pure function of
 // the API responses, so there is nothing here worth an httptest server.
 type fakeSource struct {
-	pr       *github.PullRequest
-	prErr    error
-	files    []string
-	fileErr  error
-	checks   github.Checks
-	checkErr error
-	diff     string
-	trunc    bool
-	diffErr  error
+	pr        *github.PullRequest
+	prErr     error
+	files     []string
+	fileStats []github.FileStat
+	fileErr   error
+	checks    github.Checks
+	checkErr  error
+	diff      string
+	trunc     bool
+	diffErr   error
 }
 
 func (f fakeSource) ResolveMergeable(_ context.Context, _, _ string, _ int) (*github.PullRequest, error) {
 	return f.pr, f.prErr
 }
 
-func (f fakeSource) ChangedFiles(_ context.Context, _, _ string, _ int) ([]string, error) {
-	return f.files, f.fileErr
+func (f fakeSource) ChangedFileStats(_ context.Context, _, _ string, _ int) ([]github.FileStat, error) {
+	if f.fileStats != nil {
+		return f.fileStats, f.fileErr
+	}
+	stats := make([]github.FileStat, 0, len(f.files))
+	for _, p := range f.files {
+		stats = append(stats, github.FileStat{Path: p})
+	}
+	return stats, f.fileErr
 }
 
 func (f fakeSource) CommitChecks(_ context.Context, _, _, _ string) (github.Checks, error) {
@@ -61,7 +70,7 @@ func samplePR() *github.PullRequest {
 func TestPRAssertsEveryCoreFact(t *testing.T) {
 	src := fakeSource{pr: samplePR(), files: []string{"internal/auth/token.go", "README.md"}, diff: "@@ -1 +1 @@\n+hello", trunc: false}
 
-	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil)
+	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -85,6 +94,9 @@ func TestPRAssertsEveryCoreFact(t *testing.T) {
 		"pr.diff_truncated":  false,
 		// user.author is always asserted (facts.md, "user.*").
 		"user.author": "evgeny",
+		// module.touched_count is always asserted, 0 here (no modules configured,
+		// facts.md, "module.touched_count").
+		"module.touched_count": 0,
 	}
 	for name, v := range want {
 		if got[name] != v {
@@ -107,8 +119,9 @@ func TestPRAssertsEveryCoreFact(t *testing.T) {
 	// (an empty CI, an empty diff and zero new deps are all honest answers, not
 	// dead extractors); mergeable is not, because samplePR has none and it is the
 	// one fact that may legitimately be omitted (pr_mergeable test below).
-	// user.author is always asserted too (no CODEOWNERS here, so user.owner /
-	// user.owners / user.reviewer stay unset).
+	// user.author and module.touched_count are always asserted too (no CODEOWNERS
+	// here, so user.owner / user.owners / user.reviewer stay unset; no modules
+	// configured, so module.touched_count reads 0).
 	if len(got) != len(want)+4 {
 		t.Errorf("asserted %d facts, want %d", len(got), len(want)+4)
 	}
@@ -128,7 +141,7 @@ func TestPRHasDescription(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pr := samplePR()
 			pr.Body = tt.body
-			got, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42, config.Checks{}, nil)
+			got, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42, config.Checks{}, nil, nil)
 			if err != nil {
 				t.Fatalf("PR: %v", err)
 			}
@@ -152,7 +165,7 @@ func TestPRAssertsEmptyListsRatherThanOmittingThem(t *testing.T) {
 	pr.Labels = nil
 	pr.ChangedFiles = 0
 
-	got, err := PR(context.Background(), fakeSource{pr: pr, files: nil}, "opentalon", "talooner", 42, config.Checks{}, nil)
+	got, err := PR(context.Background(), fakeSource{pr: pr, files: nil}, "opentalon", "talooner", 42, config.Checks{}, nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -173,7 +186,7 @@ func TestPRForkIsCarriedThrough(t *testing.T) {
 	pr := samplePR()
 	pr.IsFork = true
 
-	got, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42, config.Checks{}, nil)
+	got, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42, config.Checks{}, nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -189,7 +202,7 @@ func TestPRCarriesEveryChangedFile(t *testing.T) {
 		paths[i] = fmt.Sprintf("pkg/file%03d.go", i)
 	}
 
-	got, err := PR(context.Background(), fakeSource{pr: samplePR(), files: paths}, "opentalon", "talooner", 42, config.Checks{}, nil)
+	got, err := PR(context.Background(), fakeSource{pr: samplePR(), files: paths}, "opentalon", "talooner", 42, config.Checks{}, nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -214,7 +227,7 @@ func TestPRReturnsNoPartialSetOnFailure(t *testing.T) {
 		{"diff fetch fails", fakeSource{pr: samplePR(), diffErr: boom}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := PR(context.Background(), tt.src, "opentalon", "talooner", 42, config.Checks{}, nil)
+			got, err := PR(context.Background(), tt.src, "opentalon", "talooner", 42, config.Checks{}, nil, nil)
 			if err == nil {
 				t.Fatal("err = nil, want the fetch failure")
 			}
@@ -232,7 +245,7 @@ func TestPRReturnsNoPartialSetOnFailure(t *testing.T) {
 // nil PR would be silently all-zero — every string empty, every count 0 — which
 // is the one failure mode this package exists to prevent.
 func TestPRRejectsAMissingPullRequest(t *testing.T) {
-	got, err := PR(context.Background(), fakeSource{}, "opentalon", "talooner", 42, config.Checks{}, nil)
+	got, err := PR(context.Background(), fakeSource{}, "opentalon", "talooner", 42, config.Checks{}, nil, nil)
 	if err == nil {
 		t.Fatal("err = nil, want a refusal to extract from a nil pull request")
 	}
@@ -257,7 +270,7 @@ func TestPRMergeableCarriedThrough(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pr := samplePR()
 			pr.Mergeable = tt.mergeable
-			got, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42, config.Checks{}, nil)
+			got, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42, config.Checks{}, nil, nil)
 			if err != nil {
 				t.Fatalf("PR: %v", err)
 			}
@@ -277,7 +290,7 @@ func TestPRMergeableCarriedThrough(t *testing.T) {
 func TestPRMergeableOmittedDoesNotReadAsFalse(t *testing.T) {
 	pr := samplePR()
 	pr.Mergeable = nil
-	got, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42, config.Checks{}, nil)
+	got, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42, config.Checks{}, nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -301,7 +314,7 @@ func TestPRChecksPending(t *testing.T) {
 		{"no CI at all", github.Checks{}, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := PR(context.Background(), fakeSource{pr: samplePR(), checks: tt.checks}, "opentalon", "talooner", 42, config.Checks{}, nil)
+			got, err := PR(context.Background(), fakeSource{pr: samplePR(), checks: tt.checks}, "opentalon", "talooner", 42, config.Checks{}, nil, nil)
 			if err != nil {
 				t.Fatalf("PR: %v", err)
 			}
@@ -328,7 +341,7 @@ func TestPRDiffAssertedWithTruncationFlag(t *testing.T) {
 		{"empty and complete", "", false, "", false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := PR(context.Background(), fakeSource{pr: samplePR(), diff: tt.diff, trunc: tt.trunc}, "opentalon", "talooner", 42, config.Checks{}, nil)
+			got, err := PR(context.Background(), fakeSource{pr: samplePR(), diff: tt.diff, trunc: tt.trunc}, "opentalon", "talooner", 42, config.Checks{}, nil, nil)
 			if err != nil {
 				t.Fatalf("PR: %v", err)
 			}
@@ -445,7 +458,7 @@ func TestPRDerivesPassingFacts(t *testing.T) {
 	cfg := config.Checks{Tests: []string{"test"}, Lint: []string{"lint"}}
 
 	got, err := PR(context.Background(),
-		fakeSource{pr: samplePR(), checks: checks}, "opentalon", "talooner", 42, cfg, nil)
+		fakeSource{pr: samplePR(), checks: checks}, "opentalon", "talooner", 42, cfg, nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -486,7 +499,7 @@ func TestPRAssertsNewDependenciesAlways(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := PR(context.Background(),
-				fakeSource{pr: samplePR(), diff: tt.diff}, "opentalon", "talooner", 42, config.Checks{}, nil)
+				fakeSource{pr: samplePR(), diff: tt.diff}, "opentalon", "talooner", 42, config.Checks{}, nil, nil)
 			if err != nil {
 				t.Fatalf("PR: %v", err)
 			}
@@ -510,7 +523,7 @@ func TestPRLeavesPassingFactsUnsetWithoutPatterns(t *testing.T) {
 	// No patterns: the gate must not fire, so the fact is omitted rather than
 	// guessed true from unmatched CI.
 	got, err := PR(context.Background(),
-		fakeSource{pr: samplePR(), checks: checks}, "opentalon", "talooner", 42, config.Checks{}, nil)
+		fakeSource{pr: samplePR(), checks: checks}, "opentalon", "talooner", 42, config.Checks{}, nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -524,7 +537,7 @@ func TestPRLeavesPassingFactsUnsetWithoutPatterns(t *testing.T) {
 
 // user.author is always asserted as pr.author, for symmetry with user.owner.
 func TestPRUserAuthorIsPRAuthor(t *testing.T) {
-	got, err := PR(context.Background(), fakeSource{pr: samplePR()}, "opentalon", "talooner", 42, config.Checks{}, nil)
+	got, err := PR(context.Background(), fakeSource{pr: samplePR()}, "opentalon", "talooner", 42, config.Checks{}, nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -541,7 +554,7 @@ func TestPRUserOwnerFromCodeowners(t *testing.T) {
 		pr:    samplePR(),
 		files: []string{"docs/README.md", "src/app.go"},
 	}
-	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, []byte(co))
+	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, []byte(co), nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -560,7 +573,7 @@ func TestPRUserOwnerFromCodeowners(t *testing.T) {
 func TestPRUserOwnerUnsetWhenCodeownersSilent(t *testing.T) {
 	const co = "/internal/secret/* @alice\n"
 	src := fakeSource{pr: samplePR(), files: []string{"README.md"}}
-	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, []byte(co))
+	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, []byte(co), nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -585,7 +598,7 @@ func TestPRUserReviewerFromRequested(t *testing.T) {
 		{"none unset", &github.PullRequest{}, ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := PR(context.Background(), fakeSource{pr: tt.pr}, "opentalon", "talooner", 42, config.Checks{}, nil)
+			got, err := PR(context.Background(), fakeSource{pr: tt.pr}, "opentalon", "talooner", 42, config.Checks{}, nil, nil)
 			if err != nil {
 				t.Fatalf("PR: %v", err)
 			}
@@ -600,5 +613,126 @@ func TestPRUserReviewerFromRequested(t *testing.T) {
 				t.Errorf("user.reviewer = %v, want %v", v, tt.want)
 			}
 		})
+	}
+}
+
+func TestPRModuleFacts(t *testing.T) {
+	modules := []config.Module{
+		{Path: "internal/auth/", DocumentationURL: "https://docs/auth", Owner: "@alice"},
+		{Path: "billing/", DocumentationURL: "https://docs/billing", Owner: "@org/payments"},
+		{Path: "docs/", DocumentationURL: "https://docs/site", Owner: ""},
+	}
+
+	for _, tt := range []struct {
+		name    string
+		files   []github.FileStat
+		modules []config.Module
+		want    map[string]any
+		unset   []string
+	}{
+		{
+			name:    "no configured module touched",
+			files:   []github.FileStat{{Path: "README.md", Additions: 5, Deletions: 1}},
+			modules: modules,
+			want:    map[string]any{"module.touched_count": 0},
+			unset:   []string{"module.documentation_url", "module.documentation_urls", "module.owner"},
+		},
+		{
+			name:    "no modules configured at all",
+			files:   []github.FileStat{{Path: "internal/auth/x.go", Additions: 9, Deletions: 0}},
+			modules: nil,
+			want:    map[string]any{"module.touched_count": 0},
+			unset:   []string{"module.documentation_url", "module.documentation_urls", "module.owner"},
+		},
+		{
+			name:    "one module touched, full facts",
+			files:   []github.FileStat{{Path: "internal/auth/token.go", Additions: 9, Deletions: 1}},
+			modules: modules,
+			want: map[string]any{
+				"module.touched_count":      1,
+				"module.documentation_url":  "https://docs/auth",
+				"module.documentation_urls": []string{"https://docs/auth"},
+				"module.owner":              "@alice",
+			},
+		},
+		{
+			name: "primary by most changed lines, tie broken by path order",
+			files: []github.FileStat{
+				{Path: "billing/invoice.go", Additions: 2, Deletions: 0},
+				{Path: "docs/index.md", Additions: 2, Deletions: 0},
+				{Path: "internal/auth/token.go", Additions: 50, Deletions: 3},
+			},
+			modules: modules,
+			want: map[string]any{
+				"module.touched_count":      3,
+				"module.documentation_url":  "https://docs/auth",
+				"module.documentation_urls": []string{"https://docs/auth", "https://docs/billing", "https://docs/site"},
+				"module.owner":              "@alice",
+			},
+		},
+		{
+			name: "exact tie on lines falls to path order",
+			files: []github.FileStat{
+				// billing/ and docs/ both carry 4 lines; billing/ is the
+				// lexicographically smaller path, so it wins the tie.
+				{Path: "billing/x.go", Additions: 4, Deletions: 0},
+				{Path: "docs/y.md", Additions: 4, Deletions: 0},
+			},
+			modules: modules,
+			want: map[string]any{
+				"module.touched_count":      2,
+				"module.documentation_url":  "https://docs/billing",
+				"module.documentation_urls": []string{"https://docs/billing", "https://docs/site"},
+				"module.owner":              "@org/payments",
+			},
+		},
+		{
+			name:    "owner-less module does not force an empty owner fact",
+			files:   []github.FileStat{{Path: "docs/y.md", Additions: 4, Deletions: 0}},
+			modules: modules,
+			want: map[string]any{
+				"module.touched_count":      1,
+				"module.documentation_url":  "https://docs/site",
+				"module.documentation_urls": []string{"https://docs/site"},
+			},
+			unset: []string{"module.owner"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := PR(context.Background(), fakeSource{pr: samplePR(), fileStats: tt.files},
+				"opentalon", "talooner", 42, config.Checks{}, nil, tt.modules)
+			if err != nil {
+				t.Fatalf("PR: %v", err)
+			}
+			for name, v := range tt.want {
+				if !reflect.DeepEqual(got[name], v) {
+					t.Errorf("%s = %v (%T), want %v", name, got[name], got[name], v)
+				}
+			}
+			for _, name := range tt.unset {
+				if _, ok := got[name]; ok {
+					t.Errorf("%s = %v, want unset", name, got[name])
+				}
+			}
+		})
+	}
+}
+
+func TestModuleOwns(t *testing.T) {
+	cases := []struct {
+		prefix, path string
+		want         bool
+	}{
+		{"internal/auth/", "internal/auth/token.go", true},
+		{"internal/auth/", "internal/auth", true},
+		{"internal/auth/", "internal/authority/x.go", false},
+		{"billing/", "billing/invoice.go", true},
+		{"billing/", "billing", true},
+		{"docs/", "internal/docs/x.go", false},
+	}
+	for _, c := range cases {
+		if got := moduleOwns(c.prefix, c.path); got != c.want {
+			t.Errorf("moduleOwns(%q, %q) = %v, want %v", c.prefix, c.path, got, c.want)
+		}
 	}
 }

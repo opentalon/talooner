@@ -224,21 +224,24 @@ and the whole reason to have both.
 
 | Fact | Type | Source |
 |---|---|---|
-| `user.owner` | string | Primary owner of the touched code — CODEOWNERS, else `modules.yaml` |
+| `user.owner` | string | Primary owner of the touched code — CODEOWNERS |
 | `user.owners` | list\<string\> | All owners across touched paths |
 | `user.author` | string | Alias of `pr.author`, for symmetry |
 | `user.reviewer` | string | Currently requested reviewer, if one |
 | `user.last_toucher` | string | Author of the most recent prior commit to the touched paths |
+
+`user.*` ownership comes from CODEOWNERS only. A module's owner lives in
+`modules.yaml` and is exposed separately as `module.owner` (below) — it does not
+back-fill `user.owner`, so a `requires "review.senior_engineer"` keyed off
+`user.owner` still only sees CODEOWNERS ownership.
 
 Resolution order for `user.owner`, first hit wins:
 
 1. `.github/CODEOWNERS` — GitHub's own mechanism, already in most repos, already
    the thing people maintain. Reusing it beats inventing a parallel ownership
    file that drifts.
-2. `owner:` in `modules.yaml`, for repos without CODEOWNERS or where Talooner
-   ownership should differ from GitHub's auto-request behaviour.
-3. `user.last_toucher` from `git log` on the touched paths.
-4. Unset. Not `pr.author` — falling back to the author would let a rule
+2. `user.last_toucher` from `git log` on the touched paths.
+3. Unset. Not `pr.author` — falling back to the author would let a rule
    "escalate to the owner" silently escalate to the person who wrote the change,
    which is exactly the wrong answer and is invisible when it happens.
 
@@ -258,9 +261,10 @@ The three locations GitHub consults (`.github/CODEOWNERS`, `CODEOWNERS`,
 `docs/CODEOWNERS`) are tried in priority order; a repo with none leaves
 `user.owner` / `user.owners` unset.
 
-Tiers 2 (`modules.yaml`) and 3 (`git log` last-toucher) are **not** implemented
-in v1 — they are C6/E1's loaders. A path CODEOWNERS does not cover therefore
-leaves `user.owner` / `user.owners` **unset** rather than guessed at `pr.author`:
+Tier 3 (`git log` last-toucher) is **not** implemented in v1; tier 2's
+`modules.yaml` loader ships with C6, but it feeds `module.*` — not `user.owner`
+(see below). A path CODEOWNERS does not cover therefore leaves `user.owner` /
+`user.owners` **unset** rather than guessed at `pr.author`:
 the extractor does not pretend to know the owner. `user.last_toucher` is likewise
 not asserted yet. These gaps are safe under "Unset is false" — a rule gated on
 `attr "user.owner" == ...` simply does not fire for a path CODEOWNERS ignores,
@@ -361,8 +365,20 @@ unset (see "Unset is false" below).
 
 ## `module.*` and `team.*` — lookup tables
 
-External to the diff. Tenant-supplied, committed to the repo. `modules.yaml` is
-shown under `user.*` above — it carries both `documentation_url` and `owner`.
+External to the diff. Tenant-supplied, committed to the repo, read from the base
+branch at the same ref as the ruleset and config (architecture.md, "Fork safety")
+so a fork PR cannot redefine what it touches. `modules.yaml` carries both
+`documentation_url` and `owner` per path prefix:
+
+```yaml
+# .github/talooner/modules.yaml
+- path: internal/auth/
+  documentation_url: https://docs.example.com/auth
+  owner: "@alice"
+- path: billing/
+  documentation_url: https://docs.example.com/billing
+  owner: "@org/payments"
+```
 
 ```yaml
 # .github/talooner/teams.yaml
@@ -371,11 +387,30 @@ designers:     "@org/design"
 security_team: "@org/security"
 ```
 
-### Cardinality: one evaluation per PR
+### The facts
+
+| Fact | Type | When asserted |
+|---|---|---|
+| `module.touched_count` | int | Always — the number of configured modules the PR's files fall under |
+| `module.documentation_url` | string | Only when ≥1 module touched — the **primary** module's doc URL |
+| `module.documentation_urls` | list\<string\> | Only when ≥1 module touched — every touched module's doc URL, de-duplicated and sorted |
+| `module.owner` | string | Only when the **primary** module declares an owner |
+
+`module.touched_count` is **always** asserted, reading 0 when the PR touches no
+configured module — the honest answer, not an unset fact, so a rule
+`when attr "module.touched_count" > 1 do comment "pr" "Split this PR by module"`
+fires correctly even on the empty case. The other three stay unset when nothing
+is touched, so a rule gated on them simply does not fire — the safe direction.
+
+### Primary module: most changed lines, path order on a tie
 
 A PR touching five modules is evaluated **once**, not five times. `module.*`
-binds to the **primary** touched module: the one with the most changed lines,
-ties broken by path order for determinism.
+binds to the **primary** touched module: the one whose files carry the most
+changed lines (additions + deletions summed across its prefix). On a tie the
+module whose path sorts first wins, so the same PR resolves identically on a
+re-run — the determinism the brief asks for. The lines count comes from the
+Files API, and a PR larger than one page fails the run rather than returning a
+prefix, because a dropped page would silently mis-pick the primary module.
 
 The alternative — re-running the ruleset once per touched module — matches the
 brief's "verify code matches documentation" more literally, but it multiplies
@@ -384,15 +419,20 @@ approve?" a fold over N results instead of one answer. Not worth it.
 
 What this costs, so it isn't a surprise later: a PR that changes `auth/` heavily
 and `billing/` slightly only ever checks its diff against the `auth/` docs. The
-`billing/` docs go unverified. Two mitigations available inside the single-
-evaluation model:
+`billing/` docs go unverified. `module.documentation_urls` is still asserted so a
+rule *can* reference all of them — a future `llm_review` variant could take the
+list — and `module.touched_count` lets a ruleset require narrow PRs.
 
-- `module.documentation_urls` (list) is still asserted, so a rule *can* reference
-  all of them — a future `llm_review` variant could take the list.
-- A ruleset that wants per-module strictness can require narrow PRs:
-  `when attr "module.touched_count" > 1 do comment "pr" "Split this PR by module"`.
+### `team.*`: a logical name the repo maps to a GitHub team
 
-`module.touched_count` is asserted for exactly this.
+`requires "review.<name>"` resolves `<name>` through `teams.yaml` when present:
+the mapped value is taken as configured by the repo's own maintainers, so it is
+not run through the slug check and may name a team in another org
+(`"@org/security"`). A name absent from the map falls back to the path-derived
+slug (`review.security` → team `security` in the repo's org); `review.@alice`
+still means the user alice. The resolution is the same override layer the cluster
+uses to request the review and to satisfy `review.<team>.requested` / `.approved`.
+
 
 ## `review.*`
 

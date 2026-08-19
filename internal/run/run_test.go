@@ -167,6 +167,12 @@ type fakeGitHub struct {
 
 	config      string // the tenant config.yaml body; "" means no file
 	configFails bool   // true to fail the config read with a 500
+
+	modules      string // the tenant modules.yaml body; "" means no file
+	modulesFails bool   // true to fail the modules read with a 500
+	teams        string // the tenant teams.yaml body; "" means no file
+	teamsFails   bool   // true to fail the teams read with a 500
+	files        string // the PR's changed-files body; "" means the default
 }
 
 // peopleWrite is one assignee or review-request write as it reached GitHub.
@@ -388,6 +394,34 @@ func (g *fakeGitHub) client(t *testing.T) *github.Client {
 			_, _ = fmt.Fprintf(w, `{"type":"file","size":%d,"encoding":"base64","content":%q}`,
 				len(g.config), base64.StdEncoding.EncodeToString([]byte(g.config)))
 
+		case strings.HasSuffix(r.URL.Path, "/contents/.github/talooner/modules.yaml"):
+			if g.modulesFails {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = fmt.Fprint(w, `{"message":"boom"}`)
+				return
+			}
+			if g.modules == "" {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = fmt.Fprint(w, `{"message":"Not Found"}`)
+				return
+			}
+			_, _ = fmt.Fprintf(w, `{"type":"file","size":%d,"encoding":"base64","content":%q}`,
+				len(g.modules), base64.StdEncoding.EncodeToString([]byte(g.modules)))
+
+		case strings.HasSuffix(r.URL.Path, "/contents/.github/talooner/teams.yaml"):
+			if g.teamsFails {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = fmt.Fprint(w, `{"message":"boom"}`)
+				return
+			}
+			if g.teams == "" {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = fmt.Fprint(w, `{"message":"Not Found"}`)
+				return
+			}
+			_, _ = fmt.Fprintf(w, `{"type":"file","size":%d,"encoding":"base64","content":%q}`,
+				len(g.teams), base64.StdEncoding.EncodeToString([]byte(g.teams)))
+
 		// Any other contents read — CODEOWNERS among them — is an answer, not a
 		// file. The run fetches .github/CODEOWNERS / CODEOWNERS / docs/CODEOWNERS
 		// for user.owner; a repo without one must 404 like a real miss. This case
@@ -404,7 +438,14 @@ func (g *fakeGitHub) client(t *testing.T) *github.Client {
 				_, _ = fmt.Fprint(w, `{"message":"boom"}`)
 				return
 			}
-			_, _ = fmt.Fprint(w, `[{"filename":"internal/auth/token.go"}]`)
+			// The default PR touches one path under internal/auth/ with line
+			// counts, so module selection has something to sum; a test that needs
+			// a different set points g.files at its own body.
+			body := g.files
+			if body == "" {
+				body = `[{"filename":"internal/auth/token.go","additions":9,"deletions":1}]`
+			}
+			_, _ = fmt.Fprint(w, body)
 
 		case strings.HasSuffix(r.URL.Path, "/status"):
 			_, _ = fmt.Fprint(w, `{"state":"success","total_count":0,"statuses":[]}`)
@@ -652,6 +693,108 @@ func TestConfigRead(t *testing.T) {
 			t.Errorf("conclusion = %q, want neutral: a tenant config error is not a policy outcome", got.Conclusion)
 		}
 	})
+}
+
+// C6 reads modules.yaml and teams.yaml from the base branch and feeds
+// module.* and the require resolver. The PR here touches internal/auth/token.go
+// (the default /files response), which modules.yaml owns.
+func TestModuleFacts(t *testing.T) {
+	const modules = "- path: internal/auth/\n  documentation_url: https://docs/auth\n  owner: \"@alice\"\n"
+
+	t.Run("configured module touched yields module.* facts", func(t *testing.T) {
+		f := &fakeCluster{answers: evaluated()}
+		gh := &fakeGitHub{modules: modules}
+
+		if err := Run(t.Context(), Runner{
+			Event:   commentEvent("@talooner /review"),
+			GitHub:  gh.client(t),
+			Cluster: dialFake(t, f),
+		}); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		var set map[string]any
+		if err := json.Unmarshal([]byte(f.argsOf(t, cluster.ActionEvaluatePR)["facts"]), &set); err != nil {
+			t.Fatalf("facts arg: %v", err)
+		}
+		if set["module.touched_count"] != float64(1) {
+			t.Errorf("module.touched_count = %v, want 1", set["module.touched_count"])
+		}
+		if set["module.documentation_url"] != "https://docs/auth" {
+			t.Errorf("module.documentation_url = %v, want the auth docs", set["module.documentation_url"])
+		}
+		if set["module.owner"] != "@alice" {
+			t.Errorf("module.owner = %v, want @alice", set["module.owner"])
+		}
+		urls, ok := set["module.documentation_urls"].([]any)
+		if !ok || len(urls) != 1 || urls[0] != "https://docs/auth" {
+			t.Errorf("module.documentation_urls = %v, want [https://docs/auth]", set["module.documentation_urls"])
+		}
+	})
+
+	t.Run("no modules.yaml yields touched_count 0, rest unset", func(t *testing.T) {
+		f := &fakeCluster{answers: evaluated()}
+		gh := &fakeGitHub{}
+
+		if err := Run(t.Context(), Runner{
+			Event:   commentEvent("@talooner /review"),
+			GitHub:  gh.client(t),
+			Cluster: dialFake(t, f),
+		}); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		var set map[string]any
+		if err := json.Unmarshal([]byte(f.argsOf(t, cluster.ActionEvaluatePR)["facts"]), &set); err != nil {
+			t.Fatalf("facts arg: %v", err)
+		}
+		if set["module.touched_count"] != float64(0) {
+			t.Errorf("module.touched_count = %v, want 0", set["module.touched_count"])
+		}
+		for _, name := range []string{"module.documentation_url", "module.documentation_urls", "module.owner"} {
+			if _, ok := set[name]; ok {
+				t.Errorf("%s = %v, want unset", name, set[name])
+			}
+		}
+	})
+
+	t.Run("malformed modules.yaml fails the run, neutral", func(t *testing.T) {
+		f := &fakeCluster{answers: evaluated()}
+		gh := &fakeGitHub{modules: "path: [\n"}
+
+		err := Run(t.Context(), Runner{
+			Event:   commentEvent("@talooner /review"),
+			GitHub:  gh.client(t),
+			Cluster: dialFake(t, f),
+		})
+		if err == nil {
+			t.Fatal("Run = nil, want the modules parse failure")
+		}
+		if got := gh.check(t); got.Conclusion != github.ConclusionNeutral {
+			t.Errorf("conclusion = %q, want neutral: a tenant module error is not a policy outcome", got.Conclusion)
+		}
+	})
+}
+
+// teams.yaml sits in front of the path-derived require target. A ruleset that
+// asks for review.senior_oncall resolves to the team the repo mapped it to, not
+// a "senior_oncall" slug, and the mapped value may name a team in another org.
+func TestTeamsYamlResolvesRequire(t *testing.T) {
+	const teams = "senior_oncall: \"@org/security\"\npayments: \"@org/payments\"\n"
+
+	f := &fakeCluster{answers: evaluated(
+		&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_REQUIRE, Target: "review.senior_oncall"},
+	)}
+	gh := &fakeGitHub{teams: teams}
+
+	if err := Run(t.Context(), Runner{
+		Event:   commentEvent("@talooner /review"),
+		GitHub:  gh.client(t),
+		Cluster: dialFake(t, f),
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !slices.Contains(gh.requestedTeams, "org/security") {
+		t.Errorf("requested teams = %v, want org/security from teams.yaml", gh.requestedTeams)
+	}
 }
 
 // The hardest requirement of D2: Talooner's own faults are neutral. A repo that

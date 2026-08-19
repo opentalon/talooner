@@ -36,6 +36,7 @@ import (
 
 	"github.com/opentalon/talooner/internal/action"
 	"github.com/opentalon/talooner/internal/comment"
+	"github.com/opentalon/talooner/internal/config"
 	"github.com/opentalon/talooner/internal/github"
 )
 
@@ -92,10 +93,12 @@ type Syncer struct {
 // before any part of the verdict has been published — the same reason
 // Registry.Validate runs before the sticky comment goes out.
 //
-// pr supplies the state to reconcile against, read from the fetch the run has
-// already made rather than from calls of its own.
+// teams is the repo's .github/talooner/teams.yaml, used to resolve require
+// targets (facts.md, "team.*"); an empty map falls back to the path-derived
+// target. pr supplies the state to reconcile against, read from the fetch the run
+// has already made rather than from calls of its own.
 func New(gh Writer, owner, repo string, number int, pr *github.PullRequest,
-	actions []action.Action, log *slog.Logger,
+	actions []action.Action, teams config.Teams, log *slog.Logger,
 ) (*Syncer, error) {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
@@ -103,7 +106,7 @@ func New(gh Writer, owner, repo string, number int, pr *github.PullRequest,
 	if pr == nil {
 		return nil, errors.New("assignment needs the pull request it is reconciling")
 	}
-	want, err := Desired(actions, pr.Author, log)
+	want, err := Desired(actions, pr.Author, teams, log)
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +125,7 @@ func New(gh Writer, owner, repo string, number int, pr *github.PullRequest,
 // The pull request's author is dropped from the review requests rather than
 // sent: GitHub rejects the whole call with a 422 when one reviewer is the
 // author, so asking would lose the other reviewers too.
-func Desired(actions []action.Action, author string, log *slog.Logger) (Set, error) {
+func Desired(actions []action.Action, author string, teams config.Teams, log *slog.Logger) (Set, error) {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
@@ -136,7 +139,7 @@ func Desired(actions []action.Action, author string, log *slog.Logger) (Set, err
 			}
 			set.Assignees = add(set.Assignees, login)
 		case action.VerbRequire:
-			t, err := ResolveReviewer(a.Target)
+			t, err := ResolveReviewer(a.Target, teams)
 			if err != nil {
 				return Set{}, err
 			}
@@ -181,12 +184,15 @@ type Target struct {
 
 // ResolveReviewer resolves a require target to a team slug or a login.
 //
-// Until E1 lands `.github/talooner/teams.yaml`, the mapping is the target's own
-// last segment: review.security is the team `security` in the repository's
-// organisation, and review.@alice is the user alice. E1 puts the file in front
-// of this as an override layer, so a ruleset written today keeps working; a
+// teams is the repo's .github/talooner/teams.yaml (facts.md, "team.*"); when the
+// target's logical name is a key there, it resolves to that team, so a ruleset can
+// name review.senior_oncall and the repo decides which GitHub team answers. The
+// mapped value is taken as configured by the repo's own maintainers, so it is not
+// run through namePattern — a team in another organisation is "@org/team". A
+// target not in the map falls back to the path-derived slug (review.security →
+// team "security" in the repo's org), and review.@alice to the user alice. A
 // target this cannot resolve is an error naming it, never a skipped action.
-func ResolveReviewer(raw string) (Target, error) {
+func ResolveReviewer(raw string, teams config.Teams) (Target, error) {
 	target := strings.TrimSpace(raw)
 	rest := strings.TrimPrefix(target, "review.")
 	if rest == "" {
@@ -197,6 +203,11 @@ func ResolveReviewer(raw string) (Target, error) {
 			return Target{}, fmt.Errorf("%w: require %q is not a github login", ErrTarget, raw)
 		}
 		return Target{Name: user}, nil
+	}
+	if teams != nil {
+		if handle, ok := teams[rest]; ok && handle != "" {
+			return Target{Name: strings.TrimPrefix(handle, "@"), Team: true}, nil
+		}
 	}
 	if !namePattern.MatchString(rest) || strings.Contains(rest, ".") {
 		return Target{}, fmt.Errorf("%w: require %q maps to no team or user", ErrTarget, raw)
