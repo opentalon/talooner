@@ -59,6 +59,16 @@ const RulesetPath = ".github/talooner/rules.tln"
 // the run.
 const ConfigPath = ".github/talooner/config.yaml"
 
+// ModulePath is the tenant's module → docs/owner lookup table (C6), read from the
+// base branch alongside the ruleset. Missing is an answer (no module.* facts, just
+// module.touched_count = 0); malformed is a tenant error that fails the run.
+const ModulePath = ".github/talooner/modules.yaml"
+
+// TeamPath is the tenant's logical-team → GitHub-team map (C6), read from the
+// base branch alongside the ruleset. Missing is an answer (require falls back to
+// the path-derived target); malformed is a tenant error that fails the run.
+const TeamPath = ".github/talooner/teams.yaml"
+
 // Runner is one run's dependencies, already built and connected.
 type Runner struct {
 	Event   *event.Event
@@ -192,7 +202,20 @@ func (r Runner) evaluate(ctx context.Context, repo string, pr *github.PullReques
 		return err
 	}
 
-	set, err := facts.PR(ctx, r.GitHub, ev.Owner, ev.Repo, ev.PR, cfg.Checks, codeowners)
+	// modules.yaml feeds module.* (facts.md, "module.*") and teams.yaml feeds the
+	// require resolver (facts.md, "team.*"), both read from the base branch like
+	// the ruleset and config so a fork PR cannot redefine what it touches or which
+	// team answers a review request. A repo with neither is an answer, not an error.
+	modules, err := r.loadModules(ctx, ev.Owner, ev.Repo, pr.BaseRef)
+	if err != nil {
+		return err
+	}
+	teams, err := r.loadTeams(ctx, ev.Owner, ev.Repo, pr.BaseRef)
+	if err != nil {
+		return err
+	}
+
+	set, err := facts.PR(ctx, r.GitHub, ev.Owner, ev.Repo, ev.PR, cfg.Checks, codeowners, modules)
 	if err != nil {
 		return err // already names the repo and PR, and is never partial
 	}
@@ -218,7 +241,7 @@ func (r Runner) evaluate(ctx context.Context, repo string, pr *github.PullReques
 		return r.rulesetBroken(ctx, repo, pr, string(ruleset), evalErr)
 	}
 
-	return r.report(ctx, repo, pr, resp)
+	return r.report(ctx, repo, pr, resp, teams)
 }
 
 // loadConfig reads the tenant's .github/talooner/config.yaml from the base
@@ -266,6 +289,46 @@ func (r Runner) loadCodeowners(ctx context.Context, owner, repo, ref string) ([]
 	return nil, nil
 }
 
+// loadModules reads the tenant's .github/talooner/modules.yaml from the base
+// branch and parses it into the module.* lookup entries. A missing file is an
+// answer — the repo declared no modules, so module.touched_count reads 0 and the
+// other module.* facts stay unset rather than being guessed. A present but
+// unparseable file is a tenant error that fails the run, the same shape as a
+// broken config.yaml.
+func (r Runner) loadModules(ctx context.Context, owner, repo, ref string) ([]config.Module, error) {
+	data, err := r.GitHub.FileContent(ctx, owner, repo, ModulePath, ref)
+	if errors.Is(err, github.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load %s from %s/%s@%s: %w", ModulePath, owner, repo, ref, err)
+	}
+	modules, err := config.ParseModules(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s from %s/%s@%s: %w", ModulePath, owner, repo, ref, err)
+	}
+	return modules, nil
+}
+
+// loadTeams reads the tenant's .github/talooner/teams.yaml from the base branch
+// and parses the logical-team → GitHub-team map. A missing file is an answer —
+// require targets fall back to the path-derived slug. A present but unparseable
+// file is a tenant error that fails the run.
+func (r Runner) loadTeams(ctx context.Context, owner, repo, ref string) (config.Teams, error) {
+	data, err := r.GitHub.FileContent(ctx, owner, repo, TeamPath, ref)
+	if errors.Is(err, github.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load %s from %s/%s@%s: %w", TeamPath, owner, repo, ref, err)
+	}
+	teams, err := config.ParseTeams(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s from %s/%s@%s: %w", TeamPath, owner, repo, ref, err)
+	}
+	return teams, nil
+}
+
 // gate parses the command in a comment and checks the commander's access. It
 // returns (nil, nil) when there is nothing to do — the caller exits 0 without
 // saying anything, which is the whole point: a reply to an unauthorised account
@@ -309,7 +372,7 @@ func (r Runner) gate(ctx context.Context) (*command.Command, error) {
 // The action set is decoded before anything is written, so a verdict carrying a
 // verb this build has never heard of fails the run instead of being written as
 // a check run that describes half of it.
-func (r Runner) report(ctx context.Context, repo string, pr *github.PullRequest, resp *taloonerpb.EvaluatePrResponse) error {
+func (r Runner) report(ctx context.Context, repo string, pr *github.PullRequest, resp *taloonerpb.EvaluatePrResponse, teams config.Teams) error {
 	warnings := make([]check.Warning, 0, len(resp.GetWarnings()))
 	for _, w := range resp.GetWarnings() {
 		r.Log.Warn("plugin warning", "code", w.GetCode(), "message", w.GetMessage())
@@ -339,7 +402,7 @@ func (r Runner) report(ctx context.Context, repo string, pr *github.PullRequest,
 	// sticky comment goes out, rather than halfway through the writes.
 	rev := review.New(r.GitHub, r.Event.Owner, r.Event.Repo, r.Event.PR,
 		pr.HeadSHA, review.Verdict(actions), r.Log)
-	asg, err := assignment.New(r.GitHub, r.Event.Owner, r.Event.Repo, r.Event.PR, pr, actions, r.Log)
+	asg, err := assignment.New(r.GitHub, r.Event.Owner, r.Event.Repo, r.Event.PR, pr, actions, teams, r.Log)
 	if err != nil {
 		return fmt.Errorf("cannot carry out the decision for %s#%d: %w", repo, r.Event.PR, err)
 	}

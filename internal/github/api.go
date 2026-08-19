@@ -50,6 +50,15 @@ type PullRequest struct {
 	Requested Reviewers
 }
 
+// FileStat is one path the PR touches and the lines it changed, from the Files
+// API. It is what lets a module.* extractor pick the primary module by most
+// changed lines rather than by file count (facts.md, "module.*").
+type FileStat struct {
+	Path      string
+	Additions int
+	Deletions int
+}
+
 type pullRequestPayload struct {
 	Number int `json:"number"`
 	Head   struct {
@@ -190,6 +199,42 @@ func (c *Client) ChangedFiles(ctx context.Context, owner, repo string, number in
 		}
 	}
 	return paths, nil
+}
+
+// fileStat is the part of a Files API entry that ChangedFileStats reads: the
+// path and the lines it added and removed.
+type fileStat struct {
+	Filename  string `json:"filename"`
+	Additions int    `json:"additions"`
+	Deletions int    `json:"deletions"`
+}
+
+// ChangedFileStats lists every path the PR touches and the lines it changed,
+// following pagination to the end. A PR bigger than the page cap fails rather
+// than returning a prefix: module.* selection sums these counts, and a dropped
+// page would silently mis-pick the primary module.
+func (c *Client) ChangedFileStats(ctx context.Context, owner, repo string, number int) ([]FileStat, error) {
+	if number <= 0 {
+		return nil, fmt.Errorf("pull request number must be positive, got %d", number)
+	}
+	path, err := repoPath(owner, repo, "pulls", fmt.Sprint(number), "files")
+	if err != nil {
+		return nil, err
+	}
+
+	files, err := paginate[fileStat](ctx, c, path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("list changed files of %s/%s#%d: %w", owner, repo, number, err)
+	}
+
+	stats := make([]FileStat, 0, len(files))
+	for _, f := range files {
+		if f.Filename == "" {
+			continue
+		}
+		stats = append(stats, FileStat{Path: f.Filename, Additions: f.Additions, Deletions: f.Deletions})
+	}
+	return stats, nil
 }
 
 // writeAccess is the set of permission levels that may run a command. GitHub

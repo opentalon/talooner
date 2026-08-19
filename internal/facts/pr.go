@@ -18,7 +18,7 @@ type Source interface {
 	// fact it must guess. Mergeable stays nil for a closed or merged PR, which
 	// never resolves.
 	ResolveMergeable(ctx context.Context, owner, repo string, number int) (*github.PullRequest, error)
-	ChangedFiles(ctx context.Context, owner, repo string, number int) ([]string, error)
+	ChangedFileStats(ctx context.Context, owner, repo string, number int) ([]github.FileStat, error)
 	CommitChecks(ctx context.Context, owner, repo, headSHA string) (github.Checks, error)
 	// Diff is the concatenated file patches, capped at maxBytes. The second
 	// return is whether the cap was hit, so a rule can tell a complete diff from
@@ -49,7 +49,13 @@ type Source interface {
 // the owner resolution order. The modules.yaml and git-history tiers are later
 // tickets, so a path CODEOWNERS does not cover is left unowned rather than
 // guessed (see resolveOwners).
-func PR(ctx context.Context, src Source, owner, repo string, number int, checks config.Checks, codeowners []byte) (Set, error) {
+//
+// modules is the repo's .github/talooner/modules.yaml (facts.md, "module.*"),
+// read from the base branch like the ruleset so a fork PR cannot redefine what it
+// touches. An empty slice means the repo declared no modules, so every module.*
+// fact stays unset except the always-asserted module.touched_count, which reads 0
+// (facts.md, "module.touched_count").
+func PR(ctx context.Context, src Source, owner, repo string, number int, checks config.Checks, codeowners []byte, modules []config.Module) (Set, error) {
 	type prResult struct {
 		pr  *github.PullRequest
 		err error
@@ -64,9 +70,13 @@ func PR(ctx context.Context, src Source, owner, repo string, number int, checks 
 		prCh <- prResult{pr, err}
 	}()
 
-	changed, err := src.ChangedFiles(ctx, owner, repo, number)
+	stats, err := src.ChangedFileStats(ctx, owner, repo, number)
 	if err != nil {
 		return nil, fmt.Errorf("extract pr.changed_files for %s/%s#%d: %w", owner, repo, number, err)
+	}
+	changed := make([]string, 0, len(stats))
+	for _, f := range stats {
+		changed = append(changed, f.Path)
 	}
 
 	res := <-prCh
@@ -148,6 +158,10 @@ func PR(ctx context.Context, src Source, owner, repo string, number int, checks 
 	// CODEOWNERS-derived ownership. All read data already fetched here; the
 	// CODEOWNERS content is passed in rather than re-read.
 	userFacts(s, pr, changed, codeowners)
+	// module.* facts (facts.md, "module.*"): bound to the primary touched module
+	// by most changed lines, with module.touched_count always asserted. The file
+	// stats are already in hand from the ChangedFileStats fetch above.
+	moduleFacts(s, stats, modules)
 	return s, nil
 }
 
