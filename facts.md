@@ -184,10 +184,37 @@ behave so that a truncated diff is always flagged, never silent.
 
 ### `pr.new_dependencies`
 
-Count of added entries across recognised manifests (`go.mod`, `package.json`,
-`Gemfile`, `requirements.txt`, `Cargo.toml`, …), parsed from the diff.
-Lockfile-only churn does not count. Version bumps of existing deps do not count
-as *new*; a separate `pr.upgraded_dependencies` covers those.
+Count of dependencies newly added across recognised manifests, parsed from
+`pr.diff` (the diff C2 already fetches — no extra API call). It is asserted
+always: a PR that adds none gets `0`, which is the honest answer and reads as
+"no security review needed", not a dead extractor.
+
+Recognised manifests (matched by basename, in any directory):
+
+- `go.mod` — `require` entries, both block (`require ( … )`) and single-line
+  (`require module vX`) forms;
+- `package.json` — entries inside `dependencies`, `devDependencies`,
+  `optionalDependencies` and `peerDependencies` only (a top-level field of the
+  same `"key": "value"` shape is not a dependency);
+- `Gemfile` — `gem` declarations;
+- `requirements.txt` — spec lines (`name==1.2.3`, `name>=1.0`, …);
+- `Cargo.toml` — keys inside `[dependencies]`, `[dev-dependencies]` and the
+  per-dependency `[dependencies.foo]` form (the `[package]` table's
+  `name`/`version`/`edition` are not dependencies).
+
+Lockfiles are **not** read — `go.sum`, `package-lock.json`, `yarn.lock`,
+`pnpm-lock.yaml`, `Gemfile.lock`, `Cargo.lock`, `composer.lock`, `poetry.lock`,
+`Pipfile.lock` and anything ending in `.lock`. Lockfile churn is a *consequence*
+of adding a dependency, so counting it would double-count.
+
+**Version bumps are not new dependencies.** Within a file, a dependency whose
+name is both added and removed in the same diff is an upgrade, and is excluded
+from the count. Only net-new names across the recognised manifests are counted.
+
+The recognised set is deliberately narrow: a format the extractor misreads
+counts the wrong number of dependencies, and no base rule depends on this fact,
+so a format it does not recognise is safer left at zero than guessed. Extend
+`manifestNames` in `internal/facts/dependencies.go` to add one.
 
 ## `user.*` — who is responsible for this code
 

@@ -107,6 +107,12 @@ func PR(ctx context.Context, src Source, owner, repo string, number int, checks 
 	// cut off gets truncated true so it never reads as complete (issue #9).
 	s.String("pr.diff", diff)
 	s.Bool("pr.diff_truncated", truncated)
+	// pr.new_dependencies is the count of dependencies added across recognised
+	// manifests, parsed from the diff C2 already fetched (facts.md,
+	// "pr.new_dependencies"). Always asserted: a PR that adds none gets 0, which
+	// is the honest answer and reads as "no security review needed" rather than a
+	// dead extractor. Lockfile churn and version bumps are excluded there.
+	s.Int("pr.new_dependencies", countNewDependencies(diff))
 	// mergeable is the one fact GitHub computes asynchronously and returns null
 	// for until it has — the common case right after a push, which is when a run
 	// fires. A nil here is "GitHub has not said yet", which is omitted rather
