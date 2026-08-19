@@ -388,6 +388,16 @@ func (g *fakeGitHub) client(t *testing.T) *github.Client {
 			_, _ = fmt.Fprintf(w, `{"type":"file","size":%d,"encoding":"base64","content":%q}`,
 				len(g.config), base64.StdEncoding.EncodeToString([]byte(g.config)))
 
+		// Any other contents read — CODEOWNERS among them — is an answer, not a
+		// file. The run fetches .github/CODEOWNERS / CODEOWNERS / docs/CODEOWNERS
+		// for user.owner; a repo without one must 404 like a real miss. This case
+		// is last among the /contents/ branches, so the ruleset and config
+		// branches above still win for their exact paths.
+		case strings.Contains(r.URL.Path, "/contents/"):
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = fmt.Fprint(w, `{"message":"Not Found"}`)
+			return
+
 		case strings.HasSuffix(r.URL.Path, "/files"):
 			if g.failFiles {
 				w.WriteHeader(http.StatusInternalServerError)

@@ -184,7 +184,15 @@ func (r Runner) evaluate(ctx context.Context, repo string, pr *github.PullReques
 		return err // missing is handled inside; this is a malformed config
 	}
 
-	set, err := facts.PR(ctx, r.GitHub, ev.Owner, ev.Repo, ev.PR, cfg.Checks)
+	// CODEOWNERS feeds user.owner / user.owners (facts.md, "user.*"), read from
+	// the base branch like the ruleset and config so a fork PR cannot name its
+	// own owners. A repo with none is an answer, not an error.
+	codeowners, err := r.loadCodeowners(ctx, ev.Owner, ev.Repo, pr.BaseRef)
+	if err != nil {
+		return err
+	}
+
+	set, err := facts.PR(ctx, r.GitHub, ev.Owner, ev.Repo, ev.PR, cfg.Checks, codeowners)
 	if err != nil {
 		return err // already names the repo and PR, and is never partial
 	}
@@ -233,6 +241,29 @@ func (r Runner) loadConfig(ctx context.Context, owner, repo, ref string) (config
 		return config.Config{}, fmt.Errorf("parse config %s from %s/%s@%s: %w", ConfigPath, owner, repo, ref, err)
 	}
 	return cfg, nil
+}
+
+// codeownersPaths are the locations GitHub consults for CODEOWNERS, in priority
+// order (facts.md, "user.owner"). A repo may have none; that is an answer, not an
+// error, so loadCodeowners returns nil content rather than failing.
+var codeownersPaths = []string{".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"}
+
+// loadCodeowners reads the repo's CODEOWNERS from the base branch, trying each
+// recognised location in priority order and returning the first that exists. A
+// present-but-unreadable file is a tenant error that fails the run, the same
+// shape as a broken ruleset; a repo with no CODEOWNERS at any location returns
+// nil so user.owner / user.owners stay unset rather than guessed.
+func (r Runner) loadCodeowners(ctx context.Context, owner, repo, ref string) ([]byte, error) {
+	for _, p := range codeownersPaths {
+		data, err := r.GitHub.FileContent(ctx, owner, repo, p, ref)
+		if err == nil {
+			return data, nil
+		}
+		if !errors.Is(err, github.ErrNotFound) {
+			return nil, fmt.Errorf("load %s from %s/%s@%s: %w", p, owner, repo, ref, err)
+		}
+	}
+	return nil, nil
 }
 
 // gate parses the command in a comment and checks the commander's access. It
