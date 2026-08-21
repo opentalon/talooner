@@ -332,3 +332,40 @@ func TestSyncReviewRejectsANonPositivePullRequest(t *testing.T) {
 		t.Fatal("SyncReview accepted pull request 0")
 	}
 }
+
+// PullRequestReviews reads the same listing SyncReview does, unfiltered by
+// marker: it is the whole history a fact extractor folds to current state.
+func TestPullRequestReviewsReturnsEveryEntry(t *testing.T) {
+	s := &reviewServer{existing: []reviewPayload{
+		{ID: 1, State: StateApproved, CommitID: "abc", User: &reviewUser{Login: "alice", Type: "User"}},
+		{ID: 2, State: "COMMENTED", User: &reviewUser{Login: "dependabot", Type: "Bot"}},
+	}}
+
+	got, err := s.client(t).PullRequestReviews(t.Context(), "opentalon", "talooner", 42)
+	if err != nil {
+		t.Fatalf("PullRequestReviews: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d reviews, want 2", len(got))
+	}
+	if got[0].Login != "alice" || got[0].Bot || got[0].State != StateApproved || got[0].CommitID != "abc" {
+		t.Errorf("got[0] = %+v, want alice's approval at abc", got[0])
+	}
+	if got[1].Login != "dependabot" || !got[1].Bot {
+		t.Errorf("got[1] = %+v, want dependabot flagged as a bot", got[1])
+	}
+}
+
+func TestPullRequestReviewsFailsWhenTheListingFails(t *testing.T) {
+	s := &reviewServer{listStatus: http.StatusInternalServerError}
+	if _, err := s.client(t).PullRequestReviews(t.Context(), "opentalon", "talooner", 42); err == nil {
+		t.Fatal("PullRequestReviews succeeded with a broken listing")
+	}
+}
+
+func TestPullRequestReviewsRejectsANonPositivePullRequest(t *testing.T) {
+	s := &reviewServer{}
+	if _, err := s.client(t).PullRequestReviews(t.Context(), "opentalon", "talooner", 0); err == nil {
+		t.Fatal("PullRequestReviews accepted pull request 0")
+	}
+}

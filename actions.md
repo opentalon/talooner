@@ -216,11 +216,13 @@ is more honest than an App re-consent dialog: a diff, reviewed by the repo's own
 maintainers, in the repo it affects.
 
 Team membership for `review.<team>.approved` is the one thing `GITHUB_TOKEN`
-cannot read — org membership is out of a repo-scoped token's reach. Options,
-resolved when `review.*` facts land in phase 2: derive team approval from
-CODEOWNERS review requests (no extra permission, covers the common case), or take
-an optional PAT secret for orgs that need real team resolution. The default must
-work with no extra secret.
+cannot read — org membership is out of a repo-scoped token's reach. **Resolved
+in C7 (issue #14):** team approval is derived from CODEOWNERS instead of a real
+membership lookup — a login stands in for a team when CODEOWNERS lists it
+alongside that team on the same rule, for a path the PR touches. No extra
+permission or secret; wrong for a team CODEOWNERS never mentions alongside
+anyone, which is the accepted gap (facts.md, "review.*"). The PAT-secret
+alternative was not taken.
 
 ## Triggers
 
