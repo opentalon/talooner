@@ -24,6 +24,9 @@ type Source interface {
 	// return is whether the cap was hit, so a rule can tell a complete diff from
 	// a truncated one (issue #9).
 	Diff(ctx context.Context, owner, repo string, number, maxBytes int) (string, bool, error)
+	// PullRequestReviews is every review ever submitted, unfolded — review.*
+	// facts fold it to current state per login (facts.md, "review.*").
+	PullRequestReviews(ctx context.Context, owner, repo string, number int) ([]github.ReviewReport, error)
 }
 
 // PR extracts the built-in pr.* facts (facts.md, "Built-in pr.* facts"). They
@@ -55,7 +58,12 @@ type Source interface {
 // touches. An empty slice means the repo declared no modules, so every module.*
 // fact stays unset except the always-asserted module.touched_count, which reads 0
 // (facts.md, "module.touched_count").
-func PR(ctx context.Context, src Source, owner, repo string, number int, checks config.Checks, codeowners []byte, modules []config.Module) (Set, error) {
+//
+// teams is the repo's .github/talooner/teams.yaml (facts.md, "team.*"), read
+// the same way; it is also what review.<team>.* asserts facts for, so a
+// logical name a ruleset requires review from is the same name it reads
+// review facts back on.
+func PR(ctx context.Context, src Source, owner, repo string, number int, checks config.Checks, codeowners []byte, modules []config.Module, teams config.Teams) (Set, error) {
 	type prResult struct {
 		pr  *github.PullRequest
 		err error
@@ -98,6 +106,11 @@ func PR(ctx context.Context, src Source, owner, repo string, number int, checks 
 	diff, truncated, err := src.Diff(ctx, owner, repo, number, github.DiffMaxBytes)
 	if err != nil {
 		return nil, fmt.Errorf("extract pr.diff for %s/%s#%d: %w", owner, repo, number, err)
+	}
+
+	reviews, err := src.PullRequestReviews(ctx, owner, repo, number)
+	if err != nil {
+		return nil, fmt.Errorf("extract review.* for %s/%s#%d: %w", owner, repo, number, err)
 	}
 
 	s := New()
@@ -162,6 +175,10 @@ func PR(ctx context.Context, src Source, owner, repo string, number int, checks 
 	// by most changed lines, with module.touched_count always asserted. The file
 	// stats are already in hand from the ChangedFileStats fetch above.
 	moduleFacts(s, stats, modules)
+	// review.* facts (facts.md, "review.*"): folded from the whole review
+	// history fetched above, against the touched paths and the team lookup
+	// table already read for the require resolver.
+	reviewFacts(s, pr.HeadSHA, reviews, changed, codeowners, teams, pr.Requested.Teams, owner)
 	return s, nil
 }
 

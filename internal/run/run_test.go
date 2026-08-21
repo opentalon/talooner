@@ -182,11 +182,20 @@ type peopleWrite struct {
 	Teams  []string `json:"team_reviewers"`
 }
 
-// existingReview is a review already on the PR when the run starts.
+// existingReview is a review already on the PR when the run starts. It feeds
+// both the retraction listing (Body, State) and, since C7, the review.* fact
+// extractor (Login, CommitID) reading the very same endpoint.
 type existingReview struct {
-	ID    int64  `json:"id"`
-	Body  string `json:"body"`
-	State string `json:"state"`
+	ID       int64         `json:"id"`
+	Body     string        `json:"body"`
+	State    string        `json:"state"`
+	CommitID string        `json:"commit_id"`
+	User     *existingUser `json:"user,omitempty"`
+}
+
+type existingUser struct {
+	Login string `json:"login"`
+	Type  string `json:"type"`
 }
 
 // submittedReview is one review submit as it reached GitHub.
@@ -770,6 +779,71 @@ func TestModuleFacts(t *testing.T) {
 		}
 		if got := gh.check(t); got.Conclusion != github.ConclusionNeutral {
 			t.Errorf("conclusion = %q, want neutral: a tenant module error is not a policy outcome", got.Conclusion)
+		}
+	})
+}
+
+// review.* facts are re-derived from the PR's current review list every run,
+// through the same GET /reviews endpoint the retraction sync uses.
+func TestReviewFacts(t *testing.T) {
+	t.Run("non-bot approval at head sha", func(t *testing.T) {
+		f := &fakeCluster{answers: evaluated()}
+		gh := &fakeGitHub{standing: []existingReview{
+			{ID: 1, State: github.StateApproved, CommitID: "abc123", User: &existingUser{Login: "alice", Type: "User"}},
+		}}
+
+		if err := Run(t.Context(), Runner{
+			Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f),
+		}); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		var set map[string]any
+		if err := json.Unmarshal([]byte(f.argsOf(t, cluster.ActionEvaluatePR)["facts"]), &set); err != nil {
+			t.Fatalf("facts arg: %v", err)
+		}
+		if set["review.human.approved"] != true {
+			t.Errorf("review.human.approved = %v, want true", set["review.human.approved"])
+		}
+	})
+
+	t.Run("a bot's approval does not count as human", func(t *testing.T) {
+		f := &fakeCluster{answers: evaluated()}
+		gh := &fakeGitHub{standing: []existingReview{
+			{ID: 1, State: github.StateApproved, CommitID: "abc123", User: &existingUser{Login: "dependabot", Type: "Bot"}},
+		}}
+
+		if err := Run(t.Context(), Runner{
+			Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f),
+		}); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		var set map[string]any
+		if err := json.Unmarshal([]byte(f.argsOf(t, cluster.ActionEvaluatePR)["facts"]), &set); err != nil {
+			t.Fatalf("facts arg: %v", err)
+		}
+		if set["review.human.approved"] != false {
+			t.Errorf("review.human.approved = %v, want false", set["review.human.approved"])
+		}
+	})
+
+	t.Run("no reviews at all yields false, not unset", func(t *testing.T) {
+		f := &fakeCluster{answers: evaluated()}
+		gh := &fakeGitHub{}
+
+		if err := Run(t.Context(), Runner{
+			Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f),
+		}); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		var set map[string]any
+		if err := json.Unmarshal([]byte(f.argsOf(t, cluster.ActionEvaluatePR)["facts"]), &set); err != nil {
+			t.Fatalf("facts arg: %v", err)
+		}
+		if _, ok := set["review.human.approved"]; !ok {
+			t.Error("review.human.approved missing, want an explicit false")
+		}
+		if set["review.changes_requested"] != false {
+			t.Errorf("review.changes_requested = %v, want false", set["review.changes_requested"])
 		}
 	})
 }

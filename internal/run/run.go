@@ -215,7 +215,7 @@ func (r Runner) evaluate(ctx context.Context, repo string, pr *github.PullReques
 		return err
 	}
 
-	set, err := facts.PR(ctx, r.GitHub, ev.Owner, ev.Repo, ev.PR, cfg.Checks, codeowners, modules)
+	set, err := facts.PR(ctx, r.GitHub, ev.Owner, ev.Repo, ev.PR, cfg.Checks, codeowners, modules, teams)
 	if err != nil {
 		return err // already names the repo and PR, and is never partial
 	}

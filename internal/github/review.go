@@ -90,10 +90,67 @@ func (rv Review) validate() error {
 func (rv Review) text() string { return rv.Marker + "\n" + rv.Body }
 
 type reviewPayload struct {
-	ID       int64  `json:"id"`
-	Body     string `json:"body"`
-	State    string `json:"state"`
-	CommitID string `json:"commit_id"`
+	ID       int64       `json:"id"`
+	Body     string      `json:"body"`
+	State    string      `json:"state"`
+	CommitID string      `json:"commit_id"`
+	User     *reviewUser `json:"user"`
+}
+
+// reviewUser is the part of a review's author GitHub reports back: the login,
+// and Type "Bot" for an app account like dependabot — the distinction
+// review.human.approved needs (facts.md, "review.*").
+type reviewUser struct {
+	Login string `json:"login"`
+	Type  string `json:"type"`
+}
+
+// ReviewReport is one entry from a pull request's review history, as far as
+// fact extraction reads it — every review ever submitted, not folded to
+// current state. The caller derives "current" per login (facts.md,
+// "review.*"), the same way GitHub's own merge box does: a dismissal flips
+// State to DISMISSED on the same entry rather than adding a new one, so this
+// is the whole history, not a snapshot.
+type ReviewReport struct {
+	ID       int64
+	Login    string
+	Bot      bool
+	State    string
+	CommitID string
+}
+
+// PullRequestReviews lists every review ever submitted on the pull request,
+// paginated to the end. Unlike findReviews it is not filtered to Talooner's
+// own marker — every reviewer's history is what review.* facts fold down to
+// current state. A listing that fails takes the call down rather than
+// returning a partial history, the same rule as every other extractor fetch
+// (facts.md, "Unset is false").
+func (c *Client) PullRequestReviews(ctx context.Context, owner, repo string, number int) ([]ReviewReport, error) {
+	if number <= 0 {
+		return nil, fmt.Errorf("pull request number must be positive, got %d", number)
+	}
+	path, err := repoPath(owner, repo, "pulls", fmt.Sprint(number), "reviews")
+	if err != nil {
+		return nil, err
+	}
+	all, err := paginate[reviewPayload](ctx, c, path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("list reviews on %s/%s#%d: %w", owner, repo, number, err)
+	}
+
+	out := make([]ReviewReport, 0, len(all))
+	for _, r := range all {
+		if r.ID == 0 {
+			continue
+		}
+		rr := ReviewReport{ID: r.ID, State: r.State, CommitID: r.CommitID}
+		if r.User != nil {
+			rr.Login = r.User.Login
+			rr.Bot = r.User.Type == "Bot"
+		}
+		out = append(out, rr)
+	}
+	return out, nil
 }
 
 // SyncReview makes Talooner's standing review on the PR match rv, and returns

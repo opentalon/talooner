@@ -43,7 +43,7 @@ with a one-comment "no ruleset found" and does nothing else.
 | `pr.*` | GitHub API + diff, extracted by the bot | per PR, re-asserted each run |
 | `user.*` | CODEOWNERS + `modules.yaml` + GitHub | per PR run |
 | `repo.*` | repo config / GitHub metadata | per PR run |
-| `review.*` | `pull_request_review` events | per PR, accumulates |
+| `review.*` | GitHub API (review list), extracted by the bot | per PR, re-asserted each run |
 | `llm_review.*` | plugin, from an LLM call | pinned to head sha |
 | `module.*`, `team.*` | tenant-supplied lookup tables | static per repo |
 | custom | pushed by CI via the facts API | until PR closes |
@@ -430,29 +430,80 @@ the mapped value is taken as configured by the repo's own maintainers, so it is
 not run through the slug check and may name a team in another org
 (`"@org/security"`). A name absent from the map falls back to the path-derived
 slug (`review.security` → team `security` in the repo's org); `review.@alice`
-still means the user alice. The resolution is the same override layer the cluster
-uses to request the review and to satisfy `review.<team>.requested` / `.approved`.
+still means the user alice. The same resolution is what `review.<name>.*`
+(below) enumerates fact names for and matches `requested_teams` against.
 
+## `review.*` (C7, issue #14)
 
-## `review.*`
-
-Populated from `pull_request_review` and review-request events:
+Extracted from the PR's full review history (`GET .../pulls/{n}/reviews`), not
+from `pull_request_review` events — Talooner is invoked by comment, not by
+that trigger (architecture.md, "Invocation"), and re-deriving from the current
+list on every run means the facts are correct however the run was fired.
 
 | Fact | Meaning |
 |---|---|
-| `review.human.approved` | any non-bot approving review exists |
-| `review.<team>.approved` | approving review from a member of the mapped team |
-| `review.<team>.requested` | review request outstanding |
-| `review.changes_requested` | any `REQUEST_CHANGES` outstanding |
+| `review.human.approved` | a non-bot approving review exists **at the current head sha** |
+| `review.changes_requested` | any reviewer's latest decision is `REQUEST_CHANGES` |
+| `review.<name>.requested` | that team's review request is currently standing |
+| `review.<name>.approved` | a CODEOWNERS-proxy member of that team approved at the current head sha |
+| `review.<name>.stale` | such an approval exists, but at an old commit, and nothing fresher supersedes it |
 
-`do require "review.senior_engineer"` maps `senior_engineer` through
-`teams.yaml` to a GitHub team, requests its review, and satisfies when a member
-of that team approves. Team membership needs `members: read`.
+`review.human.approved` and `review.changes_requested` are always asserted —
+a PR with no reviews at all gets `false` for both, the honest answer, not a
+dead extractor. `<name>` ranges over every key in `teams.yaml` plus every team
+slug directly requested on the PR that no `teams.yaml` key already resolves
+to (a requested slug that resolves to the same target as a configured entry
+is folded into that entry's own name, so one physical team never gets two
+sets of facts); a team never mentioned by either source gets no `review.*`
+facts at all, the same "no fact key" answer `module.*` gives an untouched
+module.
+
+Every reviewer's full history is folded to one standing decision, the way
+GitHub's own merge box does: a dismissal flips the *same* review's `state` to
+`DISMISSED` rather than adding a new event, and a `COMMENTED` review never
+overrides an earlier decision — only a fresh `APPROVED` or
+`CHANGES_REQUESTED` from that login does. So a `REQUEST_CHANGES` a reviewer
+later resolves with their own approval stops counting; a bot's approval never
+counts toward `review.human.approved`, regardless of its state.
 
 Approvals are **dismissed on push** by GitHub only if the repo enables that
-setting. Talooner does not assume it — `review.*.approved` is re-derived from
-the current review list on every run, and a review whose `commit_id` predates
-the current head sha is reported separately as `review.<team>.stale`.
+setting. Talooner does not assume it: `review.human.approved` and
+`review.<name>.approved` both require `commit_id == pr.head_sha`, so an
+approval from three pushes ago simply stops being an approval rather than
+being trusted stale. For the team-scoped fact, that superseded approval isn't
+just dropped silently — it is reported as `review.<name>.stale` (true only
+while no fresher qualifying approval exists), which a comment can act on
+("re-request review") even though it doesn't gate anything itself.
+`review.changes_requested` has no sha check: GitHub itself keeps a change
+request blocking regardless of new commits, until the same reviewer submits a
+new decision or a human dismisses it, so this fact matches that behaviour
+rather than resetting it at every push.
+
+**Team membership is a CODEOWNERS proxy, not a real lookup (Evgeny's call,
+actions.md "Workflow permissions").** `GITHUB_TOKEN` is repo-scoped and cannot
+read org team membership, and the default has to work with no extra secret.
+So `review.<name>.approved` does not ask "is this login a member of the
+team" — it asks "does CODEOWNERS list this login on the same rule as the
+team, for a path this PR touches". Concretely: for every changed path, take
+the last matching CODEOWNERS rule (same resolution `user.owner` uses); if
+that rule's owners include the resolved team (`@org/slug`), every other
+individual (`@login`, not another `@org/team`) on that same line is treated as
+a proxy member for this PR. A rule like
+
+```
+/critical/  @org/security @alice @bob
+```
+
+makes alice and bob stand in for `org/security` on paths under `critical/`.
+**The gap this leaves, on purpose:** a team CODEOWNERS never lists alongside
+an individual anywhere never resolves an approval — `review.<name>.approved`
+stays `false` even when a real member of that GitHub team approves. That is
+"slightly wrong for teams not in CODEOWNERS", the cost the issue's default
+option accepts; an optional org-scoped PAT for real membership resolution was
+the other option and was not taken, to keep the default secret-free.
+`review.<name>.requested` needs no such proxy — GitHub's `requested_teams` is
+readable with no extra scope, so it is a direct match against the resolved
+team's slug.
 
 ## `llm_review.*`
 
