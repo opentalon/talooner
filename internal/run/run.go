@@ -22,6 +22,10 @@
 //   - the ruleset is read from the PR's base branch at its own ref, never from
 //     the head, because a fork PR's .github/talooner is attacker-editable.
 //
+// A fork PR's own head-branch ruleset is still read and evaluated (plan), but
+// only in a mode with no write path at all, and its decision never reaches the
+// base decision that report writes (E2, #21).
+//
 // Every "nothing to do" outcome returns nil. An unsubscribed PR, a comment with
 // no command, a repo with no ruleset — all of those are a skipped job, not a red
 // X on someone's PR. An error out of Run means the run itself is broken.
@@ -230,7 +234,7 @@ func (r Runner) evaluate(ctx context.Context, repo string, pr *github.PullReques
 		Facts:   set,
 		Ruleset: string(ruleset),
 		// Execute mode: the ruleset came from the base branch, so it is the
-		// maintainers'. Plan mode is E2's head-branch path.
+		// maintainers'.
 		Mode: cluster.ModeExecute,
 	})
 	if err != nil {
@@ -244,7 +248,76 @@ func (r Runner) evaluate(ctx context.Context, repo string, pr *github.PullReques
 		return r.rulesetBroken(ctx, repo, pr, string(ruleset), evalErr)
 	}
 
-	return r.report(ctx, repo, pr, resp, teams)
+	actions, err := action.FromProtos(resp.GetActions())
+	if err != nil {
+		return fmt.Errorf("decode the decision for %s#%d: %w", repo, ev.PR, err)
+	}
+
+	// The base decision above is the one that governs writes, full stop — it is
+	// what report() below carries out. This is purely informational and never
+	// allowed to affect that: a fork PR's own head-branch ruleset is evaluated
+	// separately, in plan mode, so a contributor sees their rule change's effect
+	// without being able to act on it (architecture.md, "Fork safety"). Best
+	// effort — it must never turn a working base evaluation into a broken run.
+	if pr.IsFork {
+		if err := r.plan(ctx, repo, pr, set, actions); err != nil {
+			r.Log.Warn("fork plan comparison did not complete", "repo", repo, "pr", ev.PR, "err", err)
+		}
+	}
+
+	return r.report(ctx, repo, pr, resp, actions, teams)
+}
+
+// plan evaluates a fork PR's own head-branch ruleset in plan mode — no writes
+// are ever possible from it, ModePlan's response carries the decision in a
+// field a caller cannot mistake for something to execute — and posts one
+// comment showing how it would differ from the base decision that actually
+// governs this run. base is the decision already reached from the base-branch
+// ruleset; plan never changes it and is never merged into it.
+//
+// A repo with no ruleset of its own on the head branch is not a fork carrying
+// anything to compare, so the comment (if any earlier run left one) is
+// resolved rather than left describing a diff that no longer applies.
+func (r Runner) plan(ctx context.Context, repo string, pr *github.PullRequest, set facts.Set, base []action.Action) error {
+	ev := r.Event
+
+	headRuleset, err := r.GitHub.FileContent(ctx, ev.Owner, ev.Repo, RulesetPath, pr.HeadSHA)
+	if errors.Is(err, github.ErrNotFound) {
+		if err := r.sticky(ctx, comment.TopicPlan, comment.PlanResolved(pr.HeadSHA), true); err != nil {
+			return fmt.Errorf("resolve stale plan comment for %s#%d: %w", repo, ev.PR, err)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("load head ruleset: %w", err)
+	}
+
+	resp, err := r.Cluster.EvaluatePR(ctx, cluster.EvaluateRequest{
+		Repo:    repo,
+		PR:      ev.PR,
+		HeadSHA: pr.HeadSHA,
+		Facts:   set,
+		Ruleset: string(headRuleset),
+		Mode:    cluster.ModePlan,
+	})
+	if err != nil {
+		return fmt.Errorf("evaluate head ruleset for %s#%d: %w", repo, ev.PR, err)
+	}
+
+	planned, err := action.FromProtos(resp.GetPlan())
+	if err != nil {
+		return fmt.Errorf("decode the plan for %s#%d: %w", repo, ev.PR, err)
+	}
+
+	added, removed := action.Diff(base, planned)
+	body, editOnly := comment.Plan(added, removed, pr.HeadSHA), false
+	if len(added) == 0 && len(removed) == 0 {
+		body, editOnly = comment.PlanResolved(pr.HeadSHA), true
+	}
+	if err := r.sticky(ctx, comment.TopicPlan, body, editOnly); err != nil {
+		return fmt.Errorf("write the plan comment for %s#%d: %w", repo, ev.PR, err)
+	}
+	return nil
 }
 
 // loadConfig reads the tenant's .github/talooner/config.yaml from the base
@@ -372,10 +445,10 @@ func (r Runner) gate(ctx context.Context) (*command.Command, error) {
 // themselves, and the talooner check run. The one part still missing is notify,
 // which is D6.
 //
-// The action set is decoded before anything is written, so a verdict carrying a
-// verb this build has never heard of fails the run instead of being written as
-// a check run that describes half of it.
-func (r Runner) report(ctx context.Context, repo string, pr *github.PullRequest, resp *taloonerpb.EvaluatePrResponse, teams config.Teams) error {
+// actions is already decoded by the caller — a verdict carrying a verb this
+// build has never heard of fails the run before report is ever called, rather
+// than after this has written a check run describing half of it.
+func (r Runner) report(ctx context.Context, repo string, pr *github.PullRequest, resp *taloonerpb.EvaluatePrResponse, actions []action.Action, teams config.Teams) error {
 	warnings := make([]check.Warning, 0, len(resp.GetWarnings()))
 	for _, w := range resp.GetWarnings() {
 		r.Log.Warn("plugin warning", "code", w.GetCode(), "message", w.GetMessage())
@@ -386,10 +459,6 @@ func (r Runner) report(ctx context.Context, repo string, pr *github.PullRequest,
 		r.Log.Info("decision", "repo", repo, "pr", r.Event.PR, "summary", summary)
 	}
 
-	actions, err := action.FromProtos(resp.GetActions())
-	if err != nil {
-		return fmt.Errorf("decode the decision for %s#%d: %w", repo, r.Event.PR, err)
-	}
 	for _, a := range actions {
 		r.Log.Info("action", "repo", repo, "pr", r.Event.PR, "verb", a.Verb, "plan", action.Describe(a))
 	}

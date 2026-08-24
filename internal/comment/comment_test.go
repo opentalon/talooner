@@ -136,6 +136,39 @@ func TestResolvedSaysTheFindingsAreGone(t *testing.T) {
 	}
 }
 
+func TestPlanRendersWhatWouldDifferAndNothingElse(t *testing.T) {
+	body := Plan(
+		[]action.Action{{Verb: action.VerbBlock, Target: "pr", Text: "needs tests"}},
+		[]action.Action{{Verb: action.VerbApprove, Target: "pr"}},
+		"abc123",
+	)
+	for _, want := range []string{"Would additionally do", "Would no longer do", "block", "approve"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body is missing %q:\n%s", want, body)
+		}
+	}
+	if !strings.Contains(body, "not performed") && !strings.Contains(body, "nothing below was performed") {
+		t.Errorf("body does not say the diff is informational only:\n%s", body)
+	}
+}
+
+func TestPlanWithOnlyOneSideOmitsTheOtherHeading(t *testing.T) {
+	body := Plan([]action.Action{{Verb: action.VerbApprove, Target: "pr"}}, nil, "abc")
+	if !strings.Contains(body, "Would additionally do") {
+		t.Errorf("body should say what the head ruleset adds:\n%s", body)
+	}
+	if strings.Contains(body, "Would no longer do") {
+		t.Errorf("body has nothing removed, should not claim it does:\n%s", body)
+	}
+}
+
+func TestPlanResolvedSaysNoDifference(t *testing.T) {
+	body := PlanResolved("abc123")
+	if !strings.Contains(body, "no difference") {
+		t.Errorf("plan-resolved body does not say the diff is gone:\n%s", body)
+	}
+}
+
 // Every body has to be postable, which means non-empty and free of the marker
 // the writer prepends.
 func TestNoBodyCarriesItsOwnMarker(t *testing.T) {

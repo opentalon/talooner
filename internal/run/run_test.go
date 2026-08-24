@@ -49,6 +49,11 @@ type fakeCluster struct {
 	calls    []*pluginpb.ToolCallRequest
 	answers  map[string]proto.Message
 	failures map[string]string
+	// planAnswer, when set, is what evaluate_pr returns for mode=plan instead of
+	// answers[ActionEvaluatePR] — the execute-mode script, which would carry
+	// Actions rather than Plan and trip EvaluatePR's own "a plan mode response
+	// may not carry executable actions" check. A test exercising E2 sets this.
+	planAnswer proto.Message
 }
 
 func (f *fakeCluster) Execute(_ context.Context, req *pluginpb.ToolCallRequest) (*pluginpb.ToolResultResponse, error) {
@@ -60,6 +65,9 @@ func (f *fakeCluster) Execute(_ context.Context, req *pluginpb.ToolCallRequest) 
 		return &pluginpb.ToolResultResponse{CallId: req.GetId(), Error: msg}, nil
 	}
 	answer, ok := f.answers[req.GetAction()]
+	if req.GetAction() == cluster.ActionEvaluatePR && req.GetArgs()["mode"] == "plan" && f.planAnswer != nil {
+		answer, ok = f.planAnswer, true
+	}
 	if !ok {
 		return &pluginpb.ToolResultResponse{CallId: req.GetId(), Error: "talooner: unknown action " + req.GetAction()}, nil
 	}
@@ -173,6 +181,15 @@ type fakeGitHub struct {
 	teams        string // the tenant teams.yaml body; "" means no file
 	teamsFails   bool   // true to fail the teams read with a 500
 	files        string // the PR's changed-files body; "" means the default
+
+	// fork makes the fixture PR's head repo a different one from its base repo,
+	// which is what pr.IsFork keys on and what turns on E2's plan comparison.
+	fork bool
+	// headRuleset is the head branch's own .github/talooner/rules.tln, read only
+	// when fork is true; "" defaults to the same body as the base ruleset, i.e. a
+	// fork carrying no rule change of its own. noHeadRuleset overrides it to a 404.
+	headRuleset   string
+	noHeadRuleset bool
 }
 
 // peopleWrite is one assignee or review-request write as it reached GitHub.
@@ -381,6 +398,24 @@ func (g *fakeGitHub) client(t *testing.T) *github.Client {
 			_, _ = fmt.Fprintf(w, `{"permission":%q}`, g.permission)
 
 		case strings.HasSuffix(r.URL.Path, "/contents/.github/talooner/rules.tln"):
+			// A fork test's head-sha read (E2) is distinguished by ref, not by
+			// path — the endpoint is the same one the base-ref read above uses,
+			// which is the whole point: GitHub serves a PR's head commit through
+			// the base repo once it is opened (auth.md).
+			if g.fork && r.URL.Query().Get("ref") == g.headSHA {
+				if g.noHeadRuleset {
+					w.WriteHeader(http.StatusNotFound)
+					_, _ = fmt.Fprint(w, `{"message":"Not Found"}`)
+					return
+				}
+				body := g.headRuleset
+				if body == "" {
+					body = ruleset
+				}
+				_, _ = fmt.Fprintf(w, `{"type":"file","size":%d,"encoding":"base64","content":%q}`,
+					len(body), base64.StdEncoding.EncodeToString([]byte(body)))
+				return
+			}
 			if g.noRuleset {
 				w.WriteHeader(http.StatusNotFound)
 				_, _ = fmt.Fprint(w, `{"message":"Not Found"}`)
@@ -470,16 +505,20 @@ func (g *fakeGitHub) client(t *testing.T) *github.Client {
 			}
 			g.mu.Lock()
 			assignees, users, teams := loginsJSON(g.assignees), loginsJSON(g.requestedUsers), slugsJSON(g.requestedTeams)
+			headRepo := "opentalon/talooner"
+			if g.fork {
+				headRepo = "attacker/talooner"
+			}
 			g.mu.Unlock()
 			_, _ = fmt.Fprintf(w, `{
 				"number": 42,
-				"head": {"sha": %q, "ref": "feat/x", "repo": {"full_name": "opentalon/talooner"}},
+				"head": {"sha": %q, "ref": "feat/x", "repo": {"full_name": %q}},
 				"base": {"sha": "def456", "ref": "master", "repo": {"full_name": "opentalon/talooner"}},
 				"user": {"login": "evgeny"},
 				"title": "Add a thing", "body": "", "state": "open", "mergeable": true,
 				"additions": 10, "deletions": 3, "changed_files": 1, "commits": 2,
 				"assignees": %s, "requested_reviewers": %s, "requested_teams": %s
-			}`, g.headSHA, assignees, users, teams)
+			}`, g.headSHA, headRepo, assignees, users, teams)
 		}
 	}))
 	t.Cleanup(srv.Close)
@@ -1721,5 +1760,132 @@ func TestAnUnmappedRequireTargetFailsBeforeAnythingIsWritten(t *testing.T) {
 	}
 	if got := gh.check(t).Conclusion; got != github.ConclusionNeutral {
 		t.Errorf("conclusion = %q, want neutral", got)
+	}
+}
+
+// E2 (#21): the base ruleset is what governs writes, always. A fork PR's own
+// head-branch ruleset is evaluated too, but only in plan mode, and shows up as
+// a diff comment against the base decision — never as anything performed.
+
+func TestForkPRPostsTheDecisionDiffAgainstTheBaseRuleset(t *testing.T) {
+	f := &fakeCluster{
+		answers: evaluated(&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_BLOCK, Target: "pr"}),
+		planAnswer: &taloonerpb.EvaluatePrResponse{
+			Plan: []*taloonerpb.Action{{Verb: taloonerpb.Verb_VERB_APPROVE, Target: "pr"}},
+		},
+	}
+	gh := &fakeGitHub{fork: true, headRuleset: "rule \"different\" { }\n"}
+
+	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var plan string
+	for _, c := range gh.comments {
+		if strings.Contains(c.Body, comment.Marker(comment.TopicPlan)) {
+			plan = c.Body
+		}
+	}
+	if plan == "" {
+		t.Fatalf("no plan comment was written: %+v", gh.comments)
+	}
+	if !strings.Contains(plan, "approve pr") {
+		t.Errorf("plan comment does not say the head ruleset would add approve pr:\n%s", plan)
+	}
+	if !strings.Contains(plan, "block pr") {
+		t.Errorf("plan comment does not say the base decision (block pr) would be dropped:\n%s", plan)
+	}
+}
+
+// The core safety property: a fork's head ruleset approving everything must
+// never reach a write, so the count of what was actually submitted has to
+// match the base decision alone — asserting on the comment text is not enough.
+func TestForkHeadRulesetApprovingEverythingWritesNothingFromIt(t *testing.T) {
+	f := &fakeCluster{
+		answers: evaluated(&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_BLOCK, Target: "pr"}),
+		planAnswer: &taloonerpb.EvaluatePrResponse{
+			Plan: []*taloonerpb.Action{{Verb: taloonerpb.Verb_VERB_APPROVE, Target: "pr"}},
+		},
+	}
+	gh := &fakeGitHub{fork: true, headRuleset: "rule \"approve everything\" { }\n"}
+
+	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(gh.reviews) != 1 || gh.reviews[0].Event != "REQUEST_CHANGES" {
+		t.Fatalf("reviews = %+v, want exactly the base decision's REQUEST_CHANGES, nothing from the head ruleset's approve", gh.reviews)
+	}
+}
+
+func TestForkPRWithNoHeadRulesetWritesNoDiffComment(t *testing.T) {
+	f := &fakeCluster{answers: evaluated(&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_APPROVE, Target: "pr"})}
+	gh := &fakeGitHub{fork: true, noHeadRuleset: true}
+
+	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	for _, c := range gh.comments {
+		if strings.Contains(c.Body, comment.Marker(comment.TopicPlan)) {
+			t.Errorf("a plan comment was written for a fork PR with no head ruleset: %q", c.Body)
+		}
+	}
+}
+
+func TestSameRepoBranchPRHasNoPlanComment(t *testing.T) {
+	f := &fakeCluster{answers: evaluated(&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_APPROVE, Target: "pr"})}
+	gh := &fakeGitHub{} // fork defaults to false
+
+	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	for _, c := range f.calls {
+		if c.GetAction() == cluster.ActionEvaluatePR && c.GetArgs()["mode"] == "plan" {
+			t.Errorf("evaluate_pr was called in plan mode for a same-repo PR")
+		}
+	}
+	for _, c := range gh.comments {
+		if strings.Contains(c.Body, comment.Marker(comment.TopicPlan)) {
+			t.Errorf("a plan comment was written for a same-repo PR: %q", c.Body)
+		}
+	}
+}
+
+// A plan comment from an earlier run, now that the head ruleset no longer
+// differs from the base decision, is edited to say so rather than left
+// describing a diff that no longer holds — same shape as the review comment's
+// own Resolved transition.
+func TestPlanDiffThatNoLongerHoldsIsResolved(t *testing.T) {
+	f := &fakeCluster{
+		answers: evaluated(&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_APPROVE, Target: "pr"}),
+		planAnswer: &taloonerpb.EvaluatePrResponse{
+			Plan: []*taloonerpb.Action{{Verb: taloonerpb.Verb_VERB_APPROVE, Target: "pr"}},
+		},
+	}
+	gh := &fakeGitHub{
+		fork:     true,
+		existing: []existingComment{{ID: 88, Body: comment.Marker(comment.TopicPlan) + "\nstale diff"}},
+	}
+
+	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var edited *writtenComment
+	for i, c := range gh.comments {
+		if strings.Contains(c.Body, comment.Marker(comment.TopicPlan)) {
+			edited = &gh.comments[i]
+		}
+	}
+	if edited == nil {
+		t.Fatalf("no plan comment was written: %+v", gh.comments)
+	}
+	if edited.created || edited.id != 88 {
+		t.Errorf("plan comment %+v, want an edit of the existing one (id 88)", edited)
+	}
+	if !strings.Contains(edited.Body, "no difference") {
+		t.Errorf("plan comment does not say the diff is gone:\n%s", edited.Body)
 	}
 }
