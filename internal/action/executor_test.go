@@ -209,8 +209,9 @@ func TestEveryVerbHasItsOwnFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read package directory: %v", err)
 	}
-	// The two files that are not verbs: the interface and the dry run.
-	infrastructure := map[string]bool{"executor.go": true, "printer.go": true}
+	// The files that are not verbs: the interface, the dry run, and the E2
+	// fork-plan comparison.
+	infrastructure := map[string]bool{"executor.go": true, "printer.go": true, "diff.go": true}
 
 	files := map[string]bool{}
 	for _, e := range entries {

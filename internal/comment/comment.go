@@ -51,6 +51,11 @@ const (
 	// identically, so without this comment there is no way to retract one
 	// without also taking away somebody's deliberate act.
 	TopicState = "state"
+	// TopicPlan is the fork-PR decision diff (E2, #21): what a fork's own
+	// head-branch ruleset would do differently from the base ruleset that
+	// actually governs writes. It is its own topic so a rule change under
+	// review does not overwrite the verdict the base ruleset already produced.
+	TopicPlan = "plan"
 )
 
 // Marker is the HTML comment identifying a topic. It is what makes a comment
@@ -148,6 +153,46 @@ func Resolved(sha string) string {
 	var b strings.Builder
 	b.WriteString("### Talooner review\n\n")
 	b.WriteString("Nothing to report. The findings that were here no longer apply.\n")
+	b.WriteString(footer(sha))
+	return b.String()
+}
+
+// Plan is the fork-PR decision diff (E2, #21): what this PR's own head-branch
+// ruleset would do differently from the base ruleset that actually governs
+// writes. Nothing in added or removed was performed — the base decision
+// already was, separately, before this comment is ever written.
+func Plan(added, removed []action.Action, sha string) string {
+	var b strings.Builder
+	b.WriteString("### Talooner plan\n\n")
+	b.WriteString("This pull request's own `.github/talooner/rules.tln` was evaluated for " +
+		"comparison only. The base branch's ruleset is what governs writes " +
+		"(architecture.md, \"Fork safety\"); nothing below was performed.\n\n")
+	if len(added) > 0 {
+		b.WriteString("**Would additionally do**\n\n")
+		for _, a := range added {
+			fmt.Fprintf(&b, "- %s\n", escape(action.Describe(a)))
+		}
+		b.WriteString("\n")
+	}
+	if len(removed) > 0 {
+		b.WriteString("**Would no longer do**\n\n")
+		for _, a := range removed {
+			fmt.Fprintf(&b, "- %s\n", escape(action.Describe(a)))
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString(footer(sha))
+	return b.String()
+}
+
+// PlanResolved is what the plan comment is edited to once the head branch's
+// ruleset no longer decides anything differently from the base branch's — or
+// once the head branch no longer carries a ruleset of its own at all. Never
+// deleted, same reasoning as Resolved: the edit history is the audit trail.
+func PlanResolved(sha string) string {
+	var b strings.Builder
+	b.WriteString("### Talooner plan\n\n")
+	b.WriteString("This pull request's own ruleset would make no difference to the base branch's decision.\n")
 	b.WriteString(footer(sha))
 	return b.String()
 }
