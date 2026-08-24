@@ -109,10 +109,12 @@ what the ledger claims. A deleted or unreadable ledger therefore means Talooner
 owns nothing and removes nothing: the failure direction is a stale assignee,
 never one taken away from the person who put it there.
 
-Until `teams.yaml` lands (E1), a `require` target maps to GitHub by its own last
-segment — `review.security` is the team `security` in the repository's
-organisation, `review.@alice` is the user alice — and a target that resolves to
-neither fails the run by name rather than being skipped.
+A `require` target resolves through `teams.yaml` when the repo has one (C6): a
+logical name like `review.security` maps to whatever GitHub team the file
+names, falling back to the team `security` in the repository's organisation
+when the file has no entry or does not exist. `review.@alice` is always the
+user alice. A target that resolves to neither fails the run by name rather
+than being skipped.
 
 So: a PR that was approved and then grows past 500 lines has its approval
 dismissed on the next run. This is why the bot re-derives all facts and

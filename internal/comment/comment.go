@@ -129,6 +129,18 @@ func Broken(reason, sha string) string {
 	return b.String()
 }
 
+// NoRuleset is the review comment for a repo that has not onboarded: no
+// rules.tln was found on the base branch (E1, #20). It is deliberately not
+// paired with a check run — a talooner check on a repo that never asked for one
+// is noise (D2) — so this comment is the only trace of the run.
+func NoRuleset(path, sha string) string {
+	var b strings.Builder
+	b.WriteString("### Talooner has nothing to review\n\n")
+	fmt.Fprintf(&b, "No `%s` was found on the base branch, so there is no ruleset to evaluate against.\n", escape(path))
+	b.WriteString(footer(sha))
+	return b.String()
+}
+
 // Resolved is what a review comment is edited to once none of its findings
 // apply any more. Never deleted: the thread under it is somebody's discussion,
 // and the edit history is the audit trail (actions.md, "Reversibility").

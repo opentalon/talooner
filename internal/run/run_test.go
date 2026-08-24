@@ -656,7 +656,8 @@ func TestNoActionsStillWritesACheckRun(t *testing.T) {
 }
 
 // A repo that has not onboarded gets no check at all: a neutral talooner check
-// on a repo that never asked for one is noise.
+// on a repo that never asked for one is noise. It gets one comment instead
+// (E1, #20), saying so.
 func TestMissingRulesetWritesNoCheckRun(t *testing.T) {
 	f := &fakeCluster{answers: evaluated()}
 	gh := &fakeGitHub{noRuleset: true}
@@ -666,6 +667,13 @@ func TestMissingRulesetWritesNoCheckRun(t *testing.T) {
 	}
 	if len(gh.checks) != 0 {
 		t.Errorf("check runs written = %+v, want none", gh.checks)
+	}
+	got := gh.wrote(t)
+	if !strings.HasPrefix(got.Body, comment.Marker(comment.TopicReview)) {
+		t.Errorf("comment does not start with the review marker:\n%s", got.Body)
+	}
+	if !strings.Contains(got.Body, RulesetPath) {
+		t.Errorf("comment does not name %s:\n%s", RulesetPath, got.Body)
 	}
 }
 
@@ -686,7 +694,7 @@ func TestConfigRead(t *testing.T) {
 		}
 	})
 
-	t.Run("malformed config fails the run, neutral", func(t *testing.T) {
+	t.Run("malformed config fails the run, neutral, and is explained in a comment", func(t *testing.T) {
 		f := &fakeCluster{answers: evaluated()}
 		gh := &fakeGitHub{config: "checks: [\n"}
 
@@ -700,6 +708,24 @@ func TestConfigRead(t *testing.T) {
 		}
 		if got := gh.check(t); got.Conclusion != github.ConclusionNeutral {
 			t.Errorf("conclusion = %q, want neutral: a tenant config error is not a policy outcome", got.Conclusion)
+		}
+		got := gh.wrote(t)
+		if !strings.Contains(got.Body, ConfigPath) {
+			t.Errorf("comment does not name %s:\n%s", ConfigPath, got.Body)
+		}
+	})
+
+	t.Run("a config field shaped like a credential fails the run", func(t *testing.T) {
+		f := &fakeCluster{answers: evaluated()}
+		gh := &fakeGitHub{config: "checks:\n  tests: [\"test\"]\napi_key: xyz\n"}
+
+		err := Run(t.Context(), Runner{
+			Event:   commentEvent("@talooner /review"),
+			GitHub:  gh.client(t),
+			Cluster: dialFake(t, f),
+		})
+		if err == nil {
+			t.Fatal("Run = nil, want the credential-field rejection")
 		}
 	})
 }
@@ -779,6 +805,24 @@ func TestModuleFacts(t *testing.T) {
 		}
 		if got := gh.check(t); got.Conclusion != github.ConclusionNeutral {
 			t.Errorf("conclusion = %q, want neutral: a tenant module error is not a policy outcome", got.Conclusion)
+		}
+		got := gh.wrote(t)
+		if !strings.Contains(got.Body, ModulePath) {
+			t.Errorf("comment does not name %s:\n%s", ModulePath, got.Body)
+		}
+	})
+
+	t.Run("a modules.yaml path escaping the repo fails the run", func(t *testing.T) {
+		f := &fakeCluster{answers: evaluated()}
+		gh := &fakeGitHub{modules: "- path: ../../etc\n"}
+
+		err := Run(t.Context(), Runner{
+			Event:   commentEvent("@talooner /review"),
+			GitHub:  gh.client(t),
+			Cluster: dialFake(t, f),
+		})
+		if err == nil {
+			t.Fatal("Run = nil, want the path-escape rejection")
 		}
 	})
 }
