@@ -30,6 +30,7 @@ Usage:
   talooner cluster login --url <host> --key <api-key>
   talooner cluster whoami
   talooner init --repo <owner/name> [--org <org>] [--force]
+  talooner rules validate <path-to-.github/talooner>
   talooner version
 `
 
@@ -49,6 +50,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runCluster(ctx, args[1:], stdout, stderr)
 	case "init":
 		return runInit(ctx, args[1:], stdout, stderr, onboard.GH{})
+	case "rules":
+		return runRules(ctx, args[1:], stdout, stderr)
 	case "version":
 		printf(stdout, "talooner %s\n", version.Version)
 		return 0
@@ -144,7 +147,7 @@ func runClusterWhoami(ctx context.Context, args []string, stdout, stderr io.Writ
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	client, err := cluster.Dial(ctx, creds.Host, creds.APIKey, cluster.WithLogger(log))
 	if err != nil {
-		printf(stderr, "%s\n", describeDialFailure(err))
+		printf(stderr, "%s\n", describeDialFailure("cluster whoami", err))
 		return 1
 	}
 	defer client.Close() //nolint:errcheck // best-effort on the way out of a one-shot command
@@ -254,22 +257,22 @@ func printf(w io.Writer, format string, args ...any) {
 }
 
 // describeDialFailure turns one of cluster.Dial's sentinel errors into the
-// onboarding-relevant sentence. Order matters: a rejected key wraps both
-// ErrAction and ErrHandshake (whoami wraps the plugin's own refusal in the
-// handshake error), so the specific case has to be checked before the
-// catch-all "cannot reach cluster" one or every rejected key would read as
-// unreachable.
-func describeDialFailure(err error) string {
+// onboarding-relevant sentence, prefixed with which command hit it. Order
+// matters: a rejected key wraps both ErrAction and ErrHandshake (a dial wraps
+// the plugin's own refusal in the handshake error), so the specific case has
+// to be checked before the catch-all "cannot reach cluster" one or every
+// rejected key would read as unreachable.
+func describeDialFailure(cmd string, err error) string {
 	switch {
 	case errors.Is(err, cluster.ErrMissingHost), errors.Is(err, cluster.ErrMissingKey):
-		return fmt.Sprintf("talooner cluster whoami: stored credentials are incomplete, run `talooner cluster login` again: %v", err)
+		return fmt.Sprintf("talooner %s: stored credentials are incomplete, run `talooner cluster login` again: %v", cmd, err)
 	case errors.Is(err, cluster.ErrProtocolSkew):
-		return fmt.Sprintf("talooner cluster whoami: protocol mismatch: %v", err)
+		return fmt.Sprintf("talooner %s: protocol mismatch: %v", cmd, err)
 	case errors.Is(err, cluster.ErrAction):
-		return fmt.Sprintf("talooner cluster whoami: rejected by cluster, the stored key may be revoked: %v", err)
+		return fmt.Sprintf("talooner %s: rejected by cluster, the stored key may be revoked: %v", cmd, err)
 	case errors.Is(err, cluster.ErrHandshake):
-		return fmt.Sprintf("talooner cluster whoami: cannot reach cluster: %v", err)
+		return fmt.Sprintf("talooner %s: cannot reach cluster: %v", cmd, err)
 	default:
-		return fmt.Sprintf("talooner cluster whoami: %v", err)
+		return fmt.Sprintf("talooner %s: %v", cmd, err)
 	}
 }
