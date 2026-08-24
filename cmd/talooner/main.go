@@ -20,6 +20,7 @@ import (
 
 	"github.com/opentalon/talooner/internal/cluster"
 	"github.com/opentalon/talooner/internal/credentials"
+	"github.com/opentalon/talooner/internal/onboard"
 	"github.com/opentalon/talooner/internal/version"
 )
 
@@ -28,6 +29,7 @@ const usage = `talooner is the operator CLI for a self-hosted Talooner deploymen
 Usage:
   talooner cluster login --url <host> --key <api-key>
   talooner cluster whoami
+  talooner init --repo <owner/name> [--org <org>] [--force]
   talooner version
 `
 
@@ -45,6 +47,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "cluster":
 		return runCluster(ctx, args[1:], stdout, stderr)
+	case "init":
+		return runInit(ctx, args[1:], stdout, stderr, onboard.GH{})
 	case "version":
 		printf(stdout, "talooner %s\n", version.Version)
 		return 0
@@ -151,6 +155,94 @@ func runClusterWhoami(ctx context.Context, args []string, stdout, stderr io.Writ
 	printf(stdout, "models:           %s\n", strings.Join(id.Models, ", "))
 	printf(stdout, "features:         %s\n", strings.Join(id.Features, ", "))
 	printf(stdout, "quota:            %d / %d calls\n", id.Quota.LLMCallsUsed, id.Quota.LLMCallsLimit)
+	return 0
+}
+
+// runInit is the entire GitHub-side install (auth.md, "Onboarding"): a
+// workflow file, a starter ruleset with its own tests, and the two secrets
+// the workflow reads. It writes local files before touching GitHub, so a
+// maintainer can always see exactly what changed with `git diff` before it's
+// pushed. gh is the gh CLI wrapper — a real onboard.GH{} from main, a fake
+// from tests, so the test suite never shells out to a real gh binary.
+func runInit(ctx context.Context, args []string, stdout, stderr io.Writer, gh onboard.Runner) int {
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	repo := fs.String("repo", "", "repo to onboard, as owner/name")
+	org := fs.String("org", "", "set secrets at the org level instead of the repo level")
+	force := fs.Bool("force", false, "overwrite an existing workflow or ruleset file that differs from the starter")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if strings.Count(*repo, "/") != 1 || strings.HasPrefix(*repo, "/") || strings.HasSuffix(*repo, "/") {
+		printf(stderr, "talooner init: --repo must be owner/name, got %q\n", *repo)
+		return 2
+	}
+
+	path, err := credentials.DefaultPath()
+	if err != nil {
+		printf(stderr, "talooner init: %v\n", err)
+		return 1
+	}
+	creds, err := credentials.Load(path)
+	if errors.Is(err, credentials.ErrNotFound) {
+		printf(stderr, "talooner init: no stored credentials, run `talooner cluster login` first\n")
+		return 1
+	}
+	if err != nil {
+		printf(stderr, "talooner init: %v\n", err)
+		return 1
+	}
+
+	files := []struct {
+		path    string
+		content []byte
+	}{
+		{onboard.WorkflowPath, onboard.Workflow},
+		{onboard.RulesetPath, onboard.Ruleset},
+		{onboard.RulesetTestPath, onboard.RulesetTest},
+	}
+	for _, f := range files {
+		outcome, diff, err := onboard.WriteFile(f.path, f.content, *force)
+		if err != nil {
+			printf(stderr, "talooner init: writing %s: %v\n", f.path, err)
+			return 1
+		}
+		switch outcome {
+		case onboard.Created:
+			printf(stdout, "wrote %s\n", f.path)
+		case onboard.Unchanged:
+			printf(stdout, "%s already up to date\n", f.path)
+		case onboard.Conflict:
+			printf(stderr, "talooner init: %s already exists and differs from the starter:\n\n%s\n"+
+				"rerun with --force to overwrite it\n", f.path, diff)
+			return 1
+		}
+	}
+
+	if err := onboard.CheckGH(ctx, gh); err != nil {
+		printf(stderr, "talooner init: %v\n", err)
+		return 1
+	}
+
+	secrets := []struct{ name, value string }{
+		{"OPENTALON_HOST", creds.Host},
+		{"OPENTALON_API_KEY", creds.APIKey},
+	}
+	for _, s := range secrets {
+		var err error
+		if *org != "" {
+			err = onboard.SetOrgSecret(ctx, gh, *org, s.name, s.value)
+		} else {
+			err = onboard.SetRepoSecret(ctx, gh, *repo, s.name, s.value)
+		}
+		if err != nil {
+			printf(stderr, "talooner init: %v\n", err)
+			return 1
+		}
+		printf(stdout, "set secret %s\n", s.name)
+	}
+
+	printf(stdout, "%s is wired up — commit the workflow and ruleset, then comment `@talooner /review` on a PR\n", *repo)
 	return 0
 }
 
