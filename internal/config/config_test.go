@@ -45,6 +45,30 @@ func TestParseRejectsGarbage(t *testing.T) {
 	}
 }
 
+// config.yaml is parsed as data only (issue #20): it must never grow a place a
+// secret looks at home. A field shaped like a credential is rejected by name,
+// at any depth, even one this build does not otherwise recognise.
+func TestParseRejectsCredentialFields(t *testing.T) {
+	for _, data := range [][]byte{
+		[]byte("api_key: xyz\n"),
+		[]byte("token: xyz\n"),
+		[]byte("checks:\n  password: xyz\n"),
+		[]byte("nested:\n  deeper:\n    auth_secret: xyz\n"),
+	} {
+		if _, err := Parse(data); err == nil {
+			t.Errorf("Parse(%q) = nil error, want one naming the credential-shaped field", data)
+		}
+	}
+}
+
+// A field that merely mentions an unrelated word must not be rejected —
+// TestParseEmptyIsValid already pins "something_else: foo: bar" as tolerated.
+func TestParseToleratesOrdinaryUnknownFields(t *testing.T) {
+	if _, err := Parse([]byte("checks:\n  tests: [\"test\"]\nnotes: \"reviewed by security\"\n")); err != nil {
+		t.Errorf("Parse: %v, want nil: an ordinary unknown field is not a credential", err)
+	}
+}
+
 // modules.yaml maps a path prefix to a documentation URL and an owner. The owner
 // may be empty, and the path keeps its trailing slash — that is how moduleOwns
 // recognises a directory prefix.
@@ -77,6 +101,28 @@ func TestParseModules(t *testing.T) {
 	}
 }
 
+// A module path is compared as a prefix against a changed file's path; it is
+// never dereferenced on disk. ".." still has no meaning there, so it can only
+// be a mistake or a probe, and issue #20 says to reject it outright.
+func TestParseModulesRejectsPathEscape(t *testing.T) {
+	for _, data := range [][]byte{
+		[]byte("- path: ../../etc\n  owner: \"@alice\"\n"),
+		[]byte("- path: internal/../../etc\n"),
+		[]byte("- path: /etc/passwd\n"),
+		[]byte("- path: \"\"\n"),
+	} {
+		if _, err := ParseModules(data); err == nil {
+			t.Errorf("ParseModules(%q) = nil error, want a rejected path", data)
+		}
+	}
+}
+
+func TestParseModulesRejectsCredentialFields(t *testing.T) {
+	if _, err := ParseModules([]byte("- path: internal/\n  api_token: xyz\n")); err == nil {
+		t.Error("ParseModules = nil error, want one naming the credential-shaped field")
+	}
+}
+
 // teams.yaml is a flat logical-name → GitHub-team map. The value is trusted repo
 // config, so it is passed through verbatim (including a cross-org "@org/team").
 func TestParseTeams(t *testing.T) {
@@ -93,5 +139,11 @@ payments: "@org/payments"
 
 	if _, err := ParseTeams([]byte("key: [\n")); err == nil {
 		t.Error("ParseTeams returned nil error for malformed YAML, want one")
+	}
+}
+
+func TestParseTeamsRejectsCredentialFields(t *testing.T) {
+	if _, err := ParseTeams([]byte("webhook_secret: xyz\n")); err == nil {
+		t.Error("ParseTeams = nil error, want one naming the credential-shaped field")
 	}
 }

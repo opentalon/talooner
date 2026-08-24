@@ -6,8 +6,7 @@
 // — with the pieces the later tickets own left as one log line each. What is
 // written back to GitHub so far is the talooner check run, the sticky review
 // comment, the approve/block review, and the assignees and review requests; the
-// notifications are D6, the full .github/talooner loader E1, and fork plan mode
-// E2.
+// notifications are D6 and fork plan mode is E2.
 //
 // Once a run knows the head sha it owes that sha a check run, including when it
 // breaks. A failure of Talooner's own is written as neutral, never failure: a
@@ -49,8 +48,9 @@ import (
 	"github.com/opentalon/talooner/internal/review"
 )
 
-// RulesetPath is the tenant ruleset, read from the base branch. The rest of
-// .github/talooner/ — config.yaml, modules.yaml, teams.yaml — arrives with E1.
+// RulesetPath is the tenant ruleset, read from the base branch alongside the
+// rest of .github/talooner/: config.yaml, modules.yaml, teams.yaml, and
+// CODEOWNERS (E1, #20). Only the per-repo handle override still lands later.
 const RulesetPath = ".github/talooner/rules.tln"
 
 // ConfigPath is the tenant's check-name patterns (C3), read from the base
@@ -180,10 +180,13 @@ func (r Runner) evaluate(ctx context.Context, repo string, pr *github.PullReques
 		if errors.Is(err, github.ErrNotFound) {
 			// Not an error, and deliberately not a check run either: a repo that
 			// has not onboarded gets no talooner check at all, rather than a
-			// neutral one implying the bot tried and failed. E1 turns this into
-			// one comment saying so.
+			// neutral one implying the bot tried and failed (D2). E1 says so in
+			// one comment instead.
 			r.Log.Info("no ruleset on the base branch, nothing to evaluate",
 				"repo", repo, "pr", ev.PR, "path", RulesetPath, "ref", pr.BaseRef)
+			if err := r.sticky(ctx, comment.TopicReview, comment.NoRuleset(RulesetPath, pr.HeadSHA), false); err != nil {
+				return fmt.Errorf("write no-ruleset comment for %s#%d: %w", repo, ev.PR, err)
+			}
 			return nil
 		}
 		return fmt.Errorf("load ruleset: %w", err)
@@ -191,7 +194,7 @@ func (r Runner) evaluate(ctx context.Context, repo string, pr *github.PullReques
 
 	cfg, err := r.loadConfig(ctx, ev.Owner, ev.Repo, pr.BaseRef)
 	if err != nil {
-		return err // missing is handled inside; this is a malformed config
+		return r.configBroken(ctx, repo, pr, err) // missing is handled inside; this is a malformed config
 	}
 
 	// CODEOWNERS feeds user.owner / user.owners (facts.md, "user.*"), read from
@@ -199,7 +202,7 @@ func (r Runner) evaluate(ctx context.Context, repo string, pr *github.PullReques
 	// own owners. A repo with none is an answer, not an error.
 	codeowners, err := r.loadCodeowners(ctx, ev.Owner, ev.Repo, pr.BaseRef)
 	if err != nil {
-		return err
+		return r.configBroken(ctx, repo, pr, err)
 	}
 
 	// modules.yaml feeds module.* (facts.md, "module.*") and teams.yaml feeds the
@@ -208,11 +211,11 @@ func (r Runner) evaluate(ctx context.Context, repo string, pr *github.PullReques
 	// team answers a review request. A repo with neither is an answer, not an error.
 	modules, err := r.loadModules(ctx, ev.Owner, ev.Repo, pr.BaseRef)
 	if err != nil {
-		return err
+		return r.configBroken(ctx, repo, pr, err)
 	}
 	teams, err := r.loadTeams(ctx, ev.Owner, ev.Repo, pr.BaseRef)
 	if err != nil {
-		return err
+		return r.configBroken(ctx, repo, pr, err)
 	}
 
 	set, err := facts.PR(ctx, r.GitHub, ev.Owner, ev.Repo, ev.PR, cfg.Checks, codeowners, modules, teams)
@@ -543,6 +546,24 @@ func (r Runner) rulesetBroken(ctx context.Context, repo string, pr *github.PullR
 		r.Log.Error("cannot write the review comment", "repo", repo, "pr", r.Event.PR, "err", err)
 	}
 	return reported{cause}
+}
+
+// configBroken writes the review comment for a .github/talooner/*.yaml file
+// this run could not use — malformed YAML, an unreadable CODEOWNERS, a
+// modules.yaml path that escapes the repository, or a field shaped like a
+// credential. The underlying yaml.v3 error already names the file (each loader
+// wraps it with the path) and the line, so comment.Broken needs nothing extra
+// to satisfy the ticket's "name the file and line" requirement.
+//
+// Unlike rulesetBroken it does not write the check run itself: the cause is
+// returned unwrapped, so Run's failOpen writes the neutral check the same way
+// it does for any other run-time failure. Only the comment needs the earlier,
+// more specific wording.
+func (r Runner) configBroken(ctx context.Context, repo string, pr *github.PullRequest, cause error) error {
+	if err := r.sticky(ctx, comment.TopicReview, comment.Broken(cause.Error(), pr.HeadSHA), false); err != nil {
+		r.Log.Error("cannot write the review comment", "repo", repo, "pr", r.Event.PR, "err", err)
+	}
+	return cause
 }
 
 // failOpen writes the neutral check run for a run that broke after it had a head

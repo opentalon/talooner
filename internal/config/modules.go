@@ -1,6 +1,11 @@
 package config
 
-import "gopkg.in/yaml.v3"
+import (
+	"fmt"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+)
 
 // Module is one entry of .github/talooner/modules.yaml (facts.md, "module.*").
 // path is a directory prefix the PR's changed files are matched against;
@@ -16,11 +21,39 @@ type Module struct {
 // error that fails the run, the same shape as a broken config.yaml; an empty
 // file is a valid, empty module set, not an error.
 func ParseModules(data []byte) ([]Module, error) {
+	if err := rejectCredentialFields(data); err != nil {
+		return nil, err
+	}
 	var ms []Module
 	if err := yaml.Unmarshal(data, &ms); err != nil {
 		return nil, err
 	}
+	for _, m := range ms {
+		if err := validateModulePath(m.Path); err != nil {
+			return nil, err
+		}
+	}
 	return ms, nil
+}
+
+// validateModulePath rejects a path that could escape the repository it is
+// matched against. moduleOwns only ever compares it against a changed file's
+// path — it is never dereferenced on disk — but config.yaml is tenant-editable
+// data (issue #20), and ".." has no meaning as a prefix a changed file could
+// ever match, so it can only be a mistake or a probe.
+func validateModulePath(p string) error {
+	if p == "" {
+		return fmt.Errorf("module path is empty")
+	}
+	if strings.HasPrefix(p, "/") {
+		return fmt.Errorf("module path %q must not be absolute", p)
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if seg == ".." {
+			return fmt.Errorf("module path %q escapes the repository", p)
+		}
+	}
+	return nil
 }
 
 // Teams is the logical-team → GitHub-team mapping of .github/talooner/teams.yaml
@@ -32,6 +65,9 @@ type Teams map[string]string
 // ParseTeams decodes teams.yaml. A present but unparseable file is a tenant error
 // that fails the run; an empty file is a valid, empty map, not an error.
 func ParseTeams(data []byte) (Teams, error) {
+	if err := rejectCredentialFields(data); err != nil {
+		return nil, err
+	}
 	var t Teams
 	if err := yaml.Unmarshal(data, &t); err != nil {
 		return nil, err

@@ -8,7 +8,12 @@
 // hang off of.
 package config
 
-import "gopkg.in/yaml.v3"
+import (
+	"fmt"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+)
 
 // Checks are the tenant-declared name patterns that decide which of the head
 // sha's CI a pr.tests_passing / pr.lint_passing fact reads. A pattern is a
@@ -32,9 +37,61 @@ type Config struct {
 // all) is a valid, empty config — a tenant that has not declared patterns gets
 // no tests_passing / lint_passing facts, not an error.
 func Parse(data []byte) (Config, error) {
+	if err := rejectCredentialFields(data); err != nil {
+		return Config{}, err
+	}
 	var c Config
 	if err := yaml.Unmarshal(data, &c); err != nil {
 		return Config{}, err
 	}
 	return c, nil
+}
+
+// credentialFieldNames are substrings that mark a YAML key as credential-shaped.
+// .github/talooner/*.yaml is parsed as data only (issue #20, "no credential
+// fields") — it must never grow a place a secret looks at home, so a field
+// shaped like one is refused by name before anything reads it.
+var credentialFieldNames = []string{"token", "secret", "password", "credential", "apikey", "api_key", "auth"}
+
+// rejectCredentialFields fails the parse when any key, at any depth, looks like
+// a credential. It walks the raw document rather than the typed struct so it
+// also catches an unrecognised field — a field this build ignores today is
+// exactly the one a later reader would trust without anyone re-checking it.
+func rejectCredentialFields(data []byte) error {
+	var raw any
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	return walkFieldNames(raw)
+}
+
+func walkFieldNames(v any) error {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, vv := range t {
+			if suspiciousFieldName(k) {
+				return fmt.Errorf("field %q is not allowed: looks like a credential", k)
+			}
+			if err := walkFieldNames(vv); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, vv := range t {
+			if err := walkFieldNames(vv); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func suspiciousFieldName(k string) bool {
+	lk := strings.ToLower(k)
+	for _, bad := range credentialFieldNames {
+		if strings.Contains(lk, bad) {
+			return true
+		}
+	}
+	return false
 }
