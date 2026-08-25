@@ -144,6 +144,170 @@ func TestRulesValidateInvalidPrintsDiagnostics(t *testing.T) {
 	}
 }
 
+func writeRulesetTest(t *testing.T, dir, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "rules.tln.test"), []byte(body), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+}
+
+func TestRulesTestRequiresPathArg(t *testing.T) {
+	withHome(t)
+	t.Chdir(t.TempDir())
+	var out, errw bytes.Buffer
+	code := run(context.Background(), []string{"rules", "test"}, &out, &errw)
+	if code != 2 {
+		t.Errorf("code = %d, want 2", code)
+	}
+}
+
+func TestRulesTestMissingRulesetFile(t *testing.T) {
+	withHome(t)
+	dir := t.TempDir()
+	var out, errw bytes.Buffer
+	code := run(context.Background(), []string{"rules", "test", dir}, &out, &errw)
+	if code != 1 {
+		t.Errorf("code = %d, want 1", code)
+	}
+	if !strings.Contains(errw.String(), "rules.tln") {
+		t.Errorf("stderr = %q, want it to name the ruleset file", errw.String())
+	}
+}
+
+func TestRulesTestMissingTestFile(t *testing.T) {
+	withHome(t)
+	dir := t.TempDir()
+	writeRuleset(t, dir, "rule \"x\" { do approve }\n")
+	var out, errw bytes.Buffer
+	code := run(context.Background(), []string{"rules", "test", dir}, &out, &errw)
+	if code != 1 {
+		t.Errorf("code = %d, want 1", code)
+	}
+	if !strings.Contains(errw.String(), "rules.tln.test") {
+		t.Errorf("stderr = %q, want it to name the test file", errw.String())
+	}
+}
+
+func TestRulesTestNoStoredCredentials(t *testing.T) {
+	withHome(t)
+	dir := t.TempDir()
+	writeRuleset(t, dir, "rule \"x\" { do approve }\n")
+	writeRulesetTest(t, dir, "test \"y\" { }\n")
+	var out, errw bytes.Buffer
+	code := run(context.Background(), []string{"rules", "test", dir}, &out, &errw)
+	if code != 1 {
+		t.Errorf("code = %d, want 1", code)
+	}
+	if !strings.Contains(errw.String(), "cluster login") {
+		t.Errorf("stderr = %q, want it to point at `cluster login`", errw.String())
+	}
+}
+
+func TestRulesTestAllPassing(t *testing.T) {
+	withHome(t)
+	host := serve(t, &fakePlugin{respond: withWhoami(t, structured(t, &taloonerpb.RunRulesetTestResponse{
+		Results: []*taloonerpb.TestOutcome{
+			{Name: "approves a clean pr", Passed: true},
+		},
+	}))})
+	seedRulesCreds(t, host)
+	dir := t.TempDir()
+	writeRuleset(t, dir, "rule \"x\" { do approve }\n")
+	writeRulesetTest(t, dir, "test \"y\" { }\n")
+
+	var out, errw bytes.Buffer
+	code := run(context.Background(), []string{"rules", "test", dir}, &out, &errw)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errw.String())
+	}
+	if !strings.Contains(out.String(), "PASS approves a clean pr") {
+		t.Errorf("stdout = %q, want the passing test named", out.String())
+	}
+	if !strings.Contains(out.String(), "1/1 tests passed") {
+		t.Errorf("stdout = %q, want a summary line", out.String())
+	}
+	if errw.Len() != 0 {
+		t.Errorf("stderr = %q, want empty when every test passes", errw.String())
+	}
+}
+
+func TestRulesTestSomeFailing(t *testing.T) {
+	withHome(t)
+	host := serve(t, &fakePlugin{respond: withWhoami(t, structured(t, &taloonerpb.RunRulesetTestResponse{
+		Results: []*taloonerpb.TestOutcome{
+			{Name: "approves a clean pr", Passed: true},
+			{Name: "blocks unresolved conflicts", Passed: false, Errors: []string{"expected did approve, got did nothing"}},
+		},
+	}))})
+	seedRulesCreds(t, host)
+	dir := t.TempDir()
+	writeRuleset(t, dir, "rule \"x\" { do approve }\n")
+	writeRulesetTest(t, dir, "test \"y\" { }\n")
+
+	var out, errw bytes.Buffer
+	code := run(context.Background(), []string{"rules", "test", dir}, &out, &errw)
+	if code != 1 {
+		t.Fatalf("code = %d, want 1", code)
+	}
+	if !strings.Contains(out.String(), "FAIL blocks unresolved conflicts") {
+		t.Errorf("stdout = %q, want the failing test named", out.String())
+	}
+	if !strings.Contains(out.String(), "expected did approve, got did nothing") {
+		t.Errorf("stdout = %q, want the assertion error", out.String())
+	}
+	if !strings.Contains(errw.String(), "1/2 tests failed") {
+		t.Errorf("stderr = %q, want a failure summary", errw.String())
+	}
+}
+
+func TestRulesTestCompileFailurePrintsDiagnostics(t *testing.T) {
+	withHome(t)
+	host := serve(t, &fakePlugin{respond: withWhoami(t, structured(t, &taloonerpb.RunRulesetTestResponse{
+		Diagnostics: []*taloonerpb.Diagnostic{{
+			Severity: taloonerpb.Severity_SEVERITY_ERROR,
+			Message:  `unexpected token "do"`,
+			Line:     3,
+			Column:   9,
+		}},
+	}))})
+	seedRulesCreds(t, host)
+	dir := t.TempDir()
+	writeRuleset(t, dir, "rule \"x\" { do }\n")
+	writeRulesetTest(t, dir, "test \"y\" { }\n")
+
+	var out, errw bytes.Buffer
+	code := run(context.Background(), []string{"rules", "test", dir}, &out, &errw)
+	if code != 1 {
+		t.Fatalf("code = %d, want 1", code)
+	}
+	if !strings.Contains(errw.String(), "line 3:9") {
+		t.Errorf("stderr = %q, want a line:column position", errw.String())
+	}
+	if !strings.Contains(errw.String(), `unexpected token "do"`) {
+		t.Errorf("stderr = %q, want the diagnostic message", errw.String())
+	}
+	if out.Len() != 0 {
+		t.Errorf("stdout = %q, want empty on a compile failure", out.String())
+	}
+}
+
+func TestRulesTestClusterUnreachable(t *testing.T) {
+	withHome(t)
+	seedRulesCreds(t, "http://127.0.0.1:1")
+	dir := t.TempDir()
+	writeRuleset(t, dir, "rule \"x\" { do approve }\n")
+	writeRulesetTest(t, dir, "test \"y\" { }\n")
+
+	var out, errw bytes.Buffer
+	code := run(context.Background(), []string{"rules", "test", dir}, &out, &errw)
+	if code != 1 {
+		t.Errorf("code = %d, want 1", code)
+	}
+	if !strings.Contains(errw.String(), "cannot reach cluster") {
+		t.Errorf("stderr = %q, want the unreachable-host message", errw.String())
+	}
+}
+
 func TestRulesValidateClusterUnreachable(t *testing.T) {
 	withHome(t)
 	seedRulesCreds(t, "http://127.0.0.1:1")

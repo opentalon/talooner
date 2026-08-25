@@ -26,6 +26,8 @@ func runRules(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	switch args[0] {
 	case "validate":
 		return runRulesValidate(ctx, args[1:], stdout, stderr)
+	case "test":
+		return runRulesTest(ctx, args[1:], stdout, stderr)
 	default:
 		printf(stderr, "talooner rules: unknown command %q\n\n%s", args[0], usage)
 		return 2
@@ -96,6 +98,110 @@ func runRulesValidate(ctx context.Context, args []string, stdout, stderr io.Writ
 	}
 	printf(stdout, "%s is valid\n", path)
 	return 0
+}
+
+// runRulesTest runs a tenant's rules.tln.test against rules.tln, round-tripped
+// to the cluster's run_ruleset_test action the same way runRulesValidate
+// round-trips to validate_ruleset (issue #24's second half) — a tenant's CI
+// and the plugin can never disagree about whether a rule passes its own
+// tests, because it is the same code path.
+func runRulesTest(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("rules test", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 1 {
+		printf(stderr, "talooner rules test: usage: talooner rules test <path-to-.github/talooner>\n")
+		return 2
+	}
+
+	rulesetPath := filepath.Join(fs.Arg(0), filepath.Base(onboard.RulesetPath))
+	src, err := os.ReadFile(rulesetPath)
+	if err != nil {
+		printf(stderr, "talooner rules test: reading %s: %v\n", rulesetPath, err)
+		return 1
+	}
+	testPath := filepath.Join(fs.Arg(0), filepath.Base(onboard.RulesetTestPath))
+	testSrc, err := os.ReadFile(testPath)
+	if err != nil {
+		printf(stderr, "talooner rules test: reading %s: %v\n", testPath, err)
+		return 1
+	}
+
+	credPath, err := credentials.DefaultPath()
+	if err != nil {
+		printf(stderr, "talooner rules test: %v\n", err)
+		return 1
+	}
+	creds, err := credentials.Load(credPath)
+	if errors.Is(err, credentials.ErrNotFound) {
+		printf(stderr, "talooner rules test: no stored credentials, run `talooner cluster login` first\n")
+		return 1
+	}
+	if err != nil {
+		printf(stderr, "talooner rules test: %v\n", err)
+		return 1
+	}
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	client, err := cluster.Dial(ctx, creds.Host, creds.APIKey, cluster.WithLogger(log))
+	if err != nil {
+		printf(stderr, "%s\n", describeDialFailure("rules test", err))
+		return 1
+	}
+	defer client.Close() //nolint:errcheck // best-effort on the way out of a one-shot command
+
+	resp, err := client.RunRulesetTest(ctx, string(src), string(testSrc))
+	if err != nil {
+		printf(stderr, "talooner rules test: %v\n", err)
+		return 1
+	}
+
+	// The plugin's Diagnostic has no file field on the wire (talooner-plugin's
+	// toProtoDiagnostics drops it), even though the underlying compiler knows
+	// whether a diagnostic came from rules.tln or rules.tln.test — so a
+	// position here can only be line:column, not a full path. Flagged
+	// upstream rather than guessed at.
+	if len(resp.GetDiagnostics()) > 0 {
+		for _, d := range resp.GetDiagnostics() {
+			printf(stderr, "%s: %s\n", testDiagnosticPosition(d), strings.TrimSpace(d.GetMessage()))
+		}
+		printf(stderr, "talooner rules test: %s did not compile\n", rulesetPath)
+		return 1
+	}
+
+	failed := 0
+	for _, r := range resp.GetResults() {
+		if r.GetPassed() {
+			printf(stdout, "PASS %s\n", r.GetName())
+			continue
+		}
+		failed++
+		printf(stdout, "FAIL %s\n", r.GetName())
+		for _, e := range r.GetErrors() {
+			printf(stdout, "     %s\n", e)
+		}
+	}
+	if failed > 0 {
+		printf(stderr, "talooner rules test: %d/%d tests failed\n", failed, len(resp.GetResults()))
+		return 1
+	}
+	printf(stdout, "%d/%d tests passed\n", len(resp.GetResults()), len(resp.GetResults()))
+	return 0
+}
+
+// testDiagnosticPosition formats a run_ruleset_test diagnostic's location as
+// line[:column] only — no file, since the wire response can't say whether the
+// diagnostic came from rules.tln or rules.tln.test (see runRulesTest).
+func testDiagnosticPosition(d *taloonerpb.Diagnostic) string {
+	if d.GetLine() <= 0 {
+		return "rules test"
+	}
+	if d.GetColumn() <= 0 {
+		return fmt.Sprintf("line %d", d.GetLine())
+	}
+	return fmt.Sprintf("line %d:%d", d.GetLine(), d.GetColumn())
 }
 
 // diagnosticPosition formats a diagnostic's location the way a compiler

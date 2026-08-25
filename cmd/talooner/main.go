@@ -31,6 +31,7 @@ Usage:
   talooner cluster whoami
   talooner init --repo <owner/name> [--org <org>] [--force]
   talooner rules validate <path-to-.github/talooner>
+  talooner rules test <path-to-.github/talooner>
   talooner version
 `
 
