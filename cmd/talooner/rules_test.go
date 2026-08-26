@@ -3,9 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/opentalon/opentalon/proto/pluginpb"
@@ -321,5 +326,134 @@ func TestRulesValidateClusterUnreachable(t *testing.T) {
 	}
 	if !strings.Contains(errw.String(), "cannot reach cluster") {
 		t.Errorf("stderr = %q, want the unreachable-host message", errw.String())
+	}
+}
+
+// serveGitHubForPlan serves just enough of the GitHub API for run.Runner.Plan
+// to extract facts.PR's inputs from a fixture PR: no fork, no config/modules/
+// teams/CODEOWNERS, one changed file, no checks, no reviews. It records every
+// method it sees, so a test can assert Plan never issues a write.
+func serveGitHubForPlan(t *testing.T) (url string, methods func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/contents/.github/talooner/rules.tln"):
+			body := "rule \"x\" { do approve }\n"
+			_, _ = fmt.Fprintf(w, `{"type":"file","size":%d,"encoding":"base64","content":%q}`,
+				len(body), base64.StdEncoding.EncodeToString([]byte(body)))
+		case strings.Contains(r.URL.Path, "/contents/"):
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = fmt.Fprint(w, `{"message":"Not Found"}`)
+		case strings.HasSuffix(r.URL.Path, "/files"):
+			_, _ = fmt.Fprint(w, `[]`)
+		case strings.HasSuffix(r.URL.Path, "/reviews"):
+			_, _ = fmt.Fprint(w, `[]`)
+		case strings.HasSuffix(r.URL.Path, "/status"):
+			_, _ = fmt.Fprint(w, `{"state":"success","total_count":0,"statuses":[]}`)
+		case strings.HasSuffix(r.URL.Path, "/check-runs"):
+			_, _ = fmt.Fprint(w, `{"total_count":0,"check_runs":[]}`)
+		default: // the pull request itself
+			_, _ = fmt.Fprint(w, `{
+				"number": 42,
+				"head": {"sha": "abc123", "ref": "feat/x", "repo": {"full_name": "opentalon/talooner"}},
+				"base": {"sha": "def456", "ref": "master", "repo": {"full_name": "opentalon/talooner"}},
+				"user": {"login": "evgeny"},
+				"title": "Add a thing", "body": "", "state": "open", "mergeable": true,
+				"additions": 10, "deletions": 3, "changed_files": 1, "commits": 2,
+				"assignees": [], "requested_reviewers": [], "requested_teams": []
+			}`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), seen...)
+	}
+}
+
+func writeMethod(m string) bool {
+	switch m {
+	case http.MethodPost, http.MethodPatch, http.MethodPut, http.MethodDelete:
+		return true
+	default:
+		return false
+	}
+}
+
+func TestRulesPlanRequiresRepoAndPR(t *testing.T) {
+	withHome(t)
+	cases := [][]string{
+		{"rules", "plan"},
+		{"rules", "plan", "--repo", "opentalon/talooner"},
+		{"rules", "plan", "--pr", "42"},
+		{"rules", "plan", "--repo", "not-owner-slash-name", "--pr", "42"},
+	}
+	for _, args := range cases {
+		var out, errw bytes.Buffer
+		code := run(context.Background(), args, &out, &errw)
+		if code != 2 {
+			t.Errorf("run(%v) code = %d, want 2", args, code)
+		}
+	}
+}
+
+func TestRulesPlanNoStoredCredentials(t *testing.T) {
+	withHome(t)
+	t.Setenv("GITHUB_TOKEN", "ghs_test")
+	var out, errw bytes.Buffer
+	code := run(context.Background(), []string{"rules", "plan", "--repo", "opentalon/talooner", "--pr", "42"}, &out, &errw)
+	if code != 1 {
+		t.Errorf("code = %d, want 1", code)
+	}
+	if !strings.Contains(errw.String(), "cluster login") {
+		t.Errorf("stderr = %q, want it to point at `cluster login`", errw.String())
+	}
+}
+
+func TestRulesPlanRendersActionsAndWritesNothing(t *testing.T) {
+	withHome(t)
+	host := serve(t, &fakePlugin{respond: withWhoami(t, structured(t, &taloonerpb.EvaluatePrResponse{
+		Plan: []*taloonerpb.Action{{Verb: taloonerpb.Verb_VERB_APPROVE, Target: "pr"}},
+	}))})
+	seedRulesCreds(t, host)
+
+	ghURL, methods := serveGitHubForPlan(t)
+	t.Setenv("GITHUB_TOKEN", "ghs_test")
+	t.Setenv("GITHUB_API_URL", ghURL)
+
+	var out, errw bytes.Buffer
+	code := run(context.Background(), []string{"rules", "plan", "--repo", "opentalon/talooner", "--pr", "42"}, &out, &errw)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errw.String())
+	}
+	if !strings.Contains(out.String(), "approve") {
+		t.Errorf("stdout = %q, want the planned approve action", out.String())
+	}
+	for _, call := range methods() {
+		if writeMethod(strings.SplitN(call, " ", 2)[0]) {
+			t.Errorf("GitHub saw %q; rules plan must never write", call)
+		}
+	}
+}
+
+func TestRulesPlanNoGitHubToken(t *testing.T) {
+	withHome(t)
+	host := serve(t, &fakePlugin{respond: whoamiOK(t)})
+	seedRulesCreds(t, host)
+
+	var out, errw bytes.Buffer
+	code := run(context.Background(), []string{"rules", "plan", "--repo", "opentalon/talooner", "--pr", "42"}, &out, &errw)
+	if code != 1 {
+		t.Errorf("code = %d, want 1", code)
+	}
+	if !strings.Contains(errw.String(), "GITHUB_TOKEN") {
+		t.Errorf("stderr = %q, want it to name the missing token", errw.String())
 	}
 }

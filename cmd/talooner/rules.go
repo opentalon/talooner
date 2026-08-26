@@ -15,7 +15,9 @@ import (
 
 	"github.com/opentalon/talooner/internal/cluster"
 	"github.com/opentalon/talooner/internal/credentials"
+	"github.com/opentalon/talooner/internal/github"
 	"github.com/opentalon/talooner/internal/onboard"
+	talrun "github.com/opentalon/talooner/internal/run"
 )
 
 func runRules(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -28,6 +30,8 @@ func runRules(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		return runRulesValidate(ctx, args[1:], stdout, stderr)
 	case "test":
 		return runRulesTest(ctx, args[1:], stdout, stderr)
+	case "plan":
+		return runRulesPlan(ctx, args[1:], stdout, stderr)
 	default:
 		printf(stderr, "talooner rules: unknown command %q\n\n%s", args[0], usage)
 		return 2
@@ -188,6 +192,68 @@ func runRulesTest(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		return 1
 	}
 	printf(stdout, "%d/%d tests passed\n", len(resp.GetResults()), len(resp.GetResults()))
+	return 0
+}
+
+// runRulesPlan runs a live PR's base-branch ruleset in plan mode and prints
+// the actions that would fire (F4, #25). It reuses run.Runner.Plan — the
+// printer executor (D1) swapped into the same registry the real run executes
+// with — so this is never a second code path that can drift from what
+// execution actually does, and mode: plan makes "zero writes" a property of
+// the wire protocol rather than a convention this command has to uphold on
+// its own.
+func runRulesPlan(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("rules plan", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	repo := fs.String("repo", "", "repo to evaluate, as owner/name")
+	pr := fs.Int("pr", 0, "pull request number")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	owner, name, ok := strings.Cut(*repo, "/")
+	if !ok || owner == "" || name == "" {
+		printf(stderr, "talooner rules plan: --repo must be owner/name, got %q\n", *repo)
+		return 2
+	}
+	if *pr <= 0 {
+		printf(stderr, "talooner rules plan: --pr is required\n")
+		return 2
+	}
+
+	credPath, err := credentials.DefaultPath()
+	if err != nil {
+		printf(stderr, "talooner rules plan: %v\n", err)
+		return 1
+	}
+	creds, err := credentials.Load(credPath)
+	if errors.Is(err, credentials.ErrNotFound) {
+		printf(stderr, "talooner rules plan: no stored credentials, run `talooner cluster login` first\n")
+		return 1
+	}
+	if err != nil {
+		printf(stderr, "talooner rules plan: %v\n", err)
+		return 1
+	}
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	client, err := cluster.Dial(ctx, creds.Host, creds.APIKey, cluster.WithLogger(log))
+	if err != nil {
+		printf(stderr, "%s\n", describeDialFailure("rules plan", err))
+		return 1
+	}
+	defer client.Close() //nolint:errcheck // best-effort on the way out of a one-shot command
+
+	gh, err := github.NewFromEnv(github.WithLogger(log), github.WithSecrets(client.APIKey()))
+	if err != nil {
+		printf(stderr, "talooner rules plan: %v\n", err)
+		return 1
+	}
+
+	r := talrun.Runner{GitHub: gh, Cluster: client, Log: log}
+	if err := r.Plan(ctx, owner, name, *pr, stdout); err != nil {
+		printf(stderr, "talooner rules plan: %v\n", err)
+		return 1
+	}
 	return 0
 }
 
