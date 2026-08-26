@@ -32,6 +32,7 @@ Usage:
   talooner init --repo <owner/name> [--org <org>] [--force]
   talooner rules validate <path-to-.github/talooner>
   talooner rules test <path-to-.github/talooner>
+  talooner rules plan --repo <owner/name> --pr <number>
   talooner version
 `
 

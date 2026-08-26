@@ -142,6 +142,7 @@ func dialFake(t *testing.T, f *fakeCluster) *cluster.Client {
 type fakeGitHub struct {
 	mu       sync.Mutex
 	paths    []string
+	methods  []string
 	checks   []writtenCheck
 	comments []writtenComment
 
@@ -264,6 +265,7 @@ func (g *fakeGitHub) client(t *testing.T) *github.Client {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		g.mu.Lock()
 		g.paths = append(g.paths, r.URL.Path)
+		g.methods = append(g.methods, r.Method)
 		g.mu.Unlock()
 
 		switch {
