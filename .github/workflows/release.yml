@@ -4,9 +4,16 @@ name: Release
 # that this workflow moves; `vX.Y.Z` tags are immutable once released. A tenant
 # with 30 repos has 30 independently pinned callers who may not run the cluster,
 # which is why v1 must never take a breaking change — that is what v2 is for.
+# `vX.Y.Z-<label>` (alpha/rc/beta) tags run the identical pipeline — same
+# ghcr image, same GitHub release, same digest-pinned action.yml commit — but
+# never touch `v1`: a prerelease must never change what pinned consumers
+# resolve to. Distinguished by the presence of a `-`, same convention semver
+# itself uses for prerelease identifiers.
 on:
   push:
-    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
 
 permissions:
   contents: write
@@ -26,6 +33,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Determine release channel
+        id: channel
+        run: |
+          set -euo pipefail
+          if [[ '${{ github.ref_name }}' == *-* ]]; then
+            prerelease=true
+          else
+            prerelease=false
+          fi
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
+          {
+            echo 'tags<<TAGS_EOF'
+            echo "ghcr.io/opentalon/talooner:${{ github.ref_name }}"
+            if [[ "$prerelease" == "false" ]]; then
+              echo "ghcr.io/opentalon/talooner:v1"
+            fi
+            echo 'TAGS_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         id: push
         uses: docker/build-push-action@v6
@@ -33,13 +60,12 @@ jobs:
           context: .
           push: true
           build-args: VERSION=${{ github.ref_name }}
-          tags: |
-            ghcr.io/opentalon/talooner:${{ github.ref_name }}
-            ghcr.io/opentalon/talooner:v1
+          tags: ${{ steps.channel.outputs.tags }}
 
       # A released tag must resolve to one immutable image, so the tag's own
       # commit gets action.yml rewritten to the digest that was just pushed.
       # The tag then moves to that commit; `main` keeps the floating v1 ref.
+      # `v1` itself only moves for a non-prerelease tag (see the top comment).
       - name: Pin action.yml to the published digest
         run: |
           set -euo pipefail
@@ -51,12 +77,23 @@ jobs:
           git config user.name  'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
           git commit -am "Pin ${{ github.ref_name }} to ${digest}"
+
+          refs=("refs/tags/${{ github.ref_name }}")
           git tag -f '${{ github.ref_name }}'
-          git tag -f v1
-          git push --force origin refs/tags/${{ github.ref_name }} refs/tags/v1
+          if [[ '${{ steps.channel.outputs.prerelease }}' == 'false' ]]; then
+            git tag -f v1
+            refs+=("refs/tags/v1")
+          fi
+          git push --force origin "${refs[@]}"
 
       - name: Create the release
-        run: gh release create '${{ github.ref_name }}' --generate-notes
+        run: |
+          set -euo pipefail
+          flags=()
+          if [[ '${{ steps.channel.outputs.prerelease }}' == 'true' ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create '${{ github.ref_name }}' "${flags[@]}" --generate-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
