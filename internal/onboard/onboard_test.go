@@ -101,7 +101,7 @@ func TestEmbeddedTemplatesAreNonEmpty(t *testing.T) {
 }
 
 func TestWorkflowReferencesTheActionAndSecrets(t *testing.T) {
-	for _, want := range []string{"opentalon/talooner@v1", "OPENTALON_HOST", "OPENTALON_API_KEY", "pull-requests: write", "checks: write"} {
+	for _, want := range []string{"opentalon/talooner@v1", "OPENTALON_HOST", "OPENTALON_API_KEY", "pull-requests: write", "checks: write", "pull_request_review"} {
 		if !strings.Contains(string(Workflow), want) {
 			t.Errorf("Workflow template missing %q", want)
 		}
