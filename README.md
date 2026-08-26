@@ -63,14 +63,18 @@ The runnable version of this ruleset, with a passing test suite, is
 [`examples/talooner_review.tln`](https://github.com/opentalon/tln-language/blob/main/examples/talooner_review.tln)
 in `tln-language`.
 
-and wires up the action in `.github/workflows/talooner.yml`:
+and wires up the action in `.github/workflows/talooner.yml` — the full trigger
+list, why `pull_request opened` and `pull_request_target` are both deliberately
+absent, and the permission block are documented in `actions.md`, "Triggers" and
+"Workflow permissions":
 
 ```yaml
 name: talooner
 on:
-  issue_comment: {types: [created]}
-  pull_request:  {types: [synchronize, reopened, closed]}
-  check_suite:   {types: [completed]}
+  issue_comment:        {types: [created]}
+  pull_request:         {types: [synchronize, reopened, closed]}
+  pull_request_review:  {types: [submitted]}
+  check_suite:          {types: [completed]}
 
 concurrency:
   group: talooner-${{ github.event.pull_request.number || github.event.issue.number }}
