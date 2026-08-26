@@ -59,3 +59,42 @@ jobs:
         run: gh release create '${{ github.ref_name }}' --generate-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Raw binaries, not archives: gh-talooner's own release workflow downloads
+  # these and re-uploads them under gh's extension asset-naming convention
+  # (gh-talooner-<os>-<arch>), so the name here only has to be unambiguous,
+  # not match gh's format itself.
+  build-cli:
+    needs: release
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Build talooner CLI
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          go build -ldflags "-X github.com/opentalon/talooner/internal/version.Version=${{ github.ref_name }}" \
+            -o "talooner_${GOOS}_${GOARCH}" ./cmd/talooner
+
+      - name: Upload to release
+        run: gh release upload '${{ github.ref_name }}' "talooner_${{ matrix.goos }}_${{ matrix.goarch }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
