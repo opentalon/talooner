@@ -17,6 +17,18 @@ const (
 	ReviewRequestChanges = "REQUEST_CHANGES"
 )
 
+// ErrReviewPermission is what SyncReview wraps a 403 or 422 in when submitting
+// a review. GitHub returns one of those two for exactly one reason in
+// practice: the repo or org has "Allow GitHub Actions to create and approve
+// pull requests" turned off, so GITHUB_TOKEN cannot leave a verdict no matter
+// what the workflow's own permissions: block says (auth.md, "Error codes",
+// TAL-E-REVIEW-PERM). Wrapping it means the check run and sticky comment say
+// that plainly instead of surfacing GitHub's raw, often terse response.
+var ErrReviewPermission = errors.New(
+	"TAL-E-REVIEW-PERM: GitHub rejected the review — insufficient permissions for talooner. " +
+		`Enable "Allow GitHub Actions to create and approve pull requests" for this repo or org ` +
+		"(Settings → Actions → General), see auth.md, \"Error codes\"")
+
 // Review states GitHub reports back. Only these two are still standing; a
 // DISMISSED, COMMENTED or PENDING review is not a verdict anyone can act on, so
 // none of them is Talooner's to dismiss.
@@ -217,6 +229,10 @@ func (c *Client) SyncReview(ctx context.Context, owner, repo string, number int,
 	}
 	var written reviewPayload
 	if _, err := c.do(ctx, request{method: http.MethodPost, path: path, body: raw}, &written); err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && (apiErr.StatusCode == http.StatusForbidden || apiErr.StatusCode == http.StatusUnprocessableEntity) {
+			return 0, fmt.Errorf("submit %s review on %s/%s#%d: %w (%v)", rv.Event, owner, repo, number, ErrReviewPermission, apiErr)
+		}
 		return 0, fmt.Errorf("submit %s review on %s/%s#%d: %w", rv.Event, owner, repo, number, err)
 	}
 	if written.ID == 0 {

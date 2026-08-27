@@ -266,6 +266,29 @@ func TestSyncReviewFailsWhenTheListingFails(t *testing.T) {
 	}
 }
 
+// GitHub answers a review submission with 403 or 422 for essentially one
+// reason: "Allow GitHub Actions to create and approve pull requests" is off.
+// SyncReview says so plainly, with the stable code from auth.md, instead of
+// surfacing GitHub's raw (often terse) body.
+func TestSyncReviewSubmitFailureNamesThePermissionCause(t *testing.T) {
+	for _, status := range []int{http.StatusForbidden, http.StatusUnprocessableEntity} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			s := &reviewServer{submitStatus: status}
+
+			_, err := s.client(t).SyncReview(t.Context(), "opentalon", "talooner", 42, approval(testMarker))
+			if err == nil {
+				t.Fatal("SyncReview succeeded with a broken submit")
+			}
+			if !errors.Is(err, ErrReviewPermission) {
+				t.Errorf("err = %v, want it to wrap ErrReviewPermission", err)
+			}
+			if !strings.Contains(err.Error(), "TAL-E-REVIEW-PERM") {
+				t.Errorf("err = %v, want the TAL-E-REVIEW-PERM code in it", err)
+			}
+		})
+	}
+}
+
 // The dismissal is what makes the retraction real, so a failed one fails the
 // run rather than being papered over with a fresh review.
 func TestSyncReviewFailsWhenTheDismissalFails(t *testing.T) {
