@@ -60,6 +60,7 @@ One check run named `talooner` per head sha, updated in place, never duplicated:
 | a `block` fired | `failure` |
 | an `approve` fired, no `block` | `success` |
 | rules fired, none decisive | `neutral` |
+| no rule fired at all | `success` |
 | ruleset invalid / extraction failed | `neutral` + annotation (**not** `failure`) |
 
 Infrastructure failure resolving to `neutral` rather than `failure` is

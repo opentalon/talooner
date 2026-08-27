@@ -6,6 +6,7 @@
 //	a block fired                        → failure
 //	an approve fired, no block           → success
 //	rules fired, none decisive           → neutral
+//	no rule fired at all                 → success
 //	Talooner itself broke                → neutral, plus annotations
 //
 // That last row is the whole point of the package. A repo that marks the
@@ -80,10 +81,10 @@ func Decision(actions []action.Action, warnings []Warning, summary string) githu
 		cr.Conclusion = github.ConclusionNeutral
 		cr.Title = "Reviewed"
 	default:
-		// No action firing is a verdict too, not a missing one. Saying so is
-		// what distinguishes it from a run that never happened.
-		cr.Conclusion = github.ConclusionNeutral
-		cr.Title = "No rules fired"
+		// No action firing is a verdict too, not a missing one: the ruleset
+		// ran and found nothing to object to, same as a clean lint pass.
+		cr.Conclusion = github.ConclusionSuccess
+		cr.Title = "No issues found"
 	}
 
 	var b strings.Builder
@@ -92,7 +93,7 @@ func Decision(actions []action.Action, warnings []Warning, summary string) githu
 		b.WriteString("\n\n")
 	}
 	if len(actions) == 0 {
-		b.WriteString("No rule matched this pull request.\n")
+		b.WriteString("No rule matched this pull request — nothing to flag.\n")
 	} else {
 		b.WriteString("Actions:\n\n")
 		for _, a := range actions {

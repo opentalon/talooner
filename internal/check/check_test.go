@@ -30,7 +30,7 @@ func TestDecisionConclusions(t *testing.T) {
 		{"a block fired", []action.Action{act(action.VerbBlock)}, github.ConclusionFailure},
 		{"an approve fired", []action.Action{act(action.VerbApprove)}, github.ConclusionSuccess},
 		{"nothing decisive", []action.Action{act(action.VerbComment)}, github.ConclusionNeutral},
-		{"no rule fired", nil, github.ConclusionNeutral},
+		{"no rule fired", nil, github.ConclusionSuccess},
 		{
 			"an unresolved tie is a failure, not a success",
 			[]action.Action{act(action.VerbApprove), act(action.VerbBlock)},
