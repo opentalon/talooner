@@ -691,8 +691,8 @@ func TestNoActionsStillWritesACheckRun(t *testing.T) {
 	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got := gh.check(t); got.Conclusion != github.ConclusionNeutral {
-		t.Errorf("conclusion = %q, want neutral", got.Conclusion)
+	if got := gh.check(t); got.Conclusion != github.ConclusionSuccess {
+		t.Errorf("conclusion = %q, want success", got.Conclusion)
 	}
 }
 
