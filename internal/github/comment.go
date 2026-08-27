@@ -59,17 +59,22 @@ func (s StickyComment) validate() error {
 // text is what actually gets posted: the marker, then the body, truncated to
 // the API's limit if it has to be.
 func (s StickyComment) text() string {
-	full := s.Marker + "\n" + s.Body
-	if len(full) <= maxCommentBytes {
-		return full
+	return truncate(s.Marker + "\n" + s.Body)
+}
+
+// truncate caps s at GitHub's comment size limit, appending truncationNotice
+// so a body that had to be cut still says so.
+func truncate(s string) string {
+	if len(s) <= maxCommentBytes {
+		return s
 	}
-	keep := maxCommentBytes - len(s.Marker) - 1 - len(truncationNotice)
-	body := s.Body[:max(keep, 0)]
+	keep := maxCommentBytes - len(truncationNotice)
+	s = s[:max(keep, 0)]
 	// Cutting mid-rune would post invalid UTF-8; back off to the last whole one.
-	for len(body) > 0 && !utf8.ValidString(body) {
-		body = body[:len(body)-1]
+	for len(s) > 0 && !utf8.ValidString(s) {
+		s = s[:len(s)-1]
 	}
-	return s.Marker + "\n" + body + truncationNotice
+	return s + truncationNotice
 }
 
 type issueComment struct {
@@ -150,6 +155,36 @@ func (c *Client) editComment(ctx context.Context, owner, repo string, id int64, 
 		return 0, fmt.Errorf("edit comment %d on %s/%s: %w", id, owner, repo, err)
 	}
 	return id, nil
+}
+
+// CreateComment posts body as a new comment on pull request number. Unlike
+// UpsertComment it is never looked up or edited again — for a reply to a
+// one-off ask (`/why`) rather than an ongoing verdict: a later ask at a later
+// sha is a different question, not an edit to this one.
+func (c *Client) CreateComment(ctx context.Context, owner, repo string, number int, body string) (int64, error) {
+	if number <= 0 {
+		return 0, fmt.Errorf("pull request number must be positive, got %d", number)
+	}
+	if strings.TrimSpace(body) == "" {
+		return 0, errors.New("comment needs a body")
+	}
+
+	raw, err := json.Marshal(issueComment{Body: truncate(body)})
+	if err != nil {
+		return 0, fmt.Errorf("encode comment on %s/%s#%d: %w", owner, repo, number, err)
+	}
+	path, err := repoPath(owner, repo, "issues", fmt.Sprint(number), "comments")
+	if err != nil {
+		return 0, err
+	}
+	var written issueComment
+	if _, err := c.do(ctx, request{method: http.MethodPost, path: path, body: raw}, &written); err != nil {
+		return 0, fmt.Errorf("post comment on %s/%s#%d: %w", owner, repo, number, err)
+	}
+	if written.ID == 0 {
+		return 0, fmt.Errorf("post comment on %s/%s#%d: response carried no id", owner, repo, number)
+	}
+	return written.ID, nil
 }
 
 // CommentBody returns the body of the oldest comment carrying marker, or ""

@@ -303,3 +303,77 @@ func TestCommentNeedsAPullRequestNumber(t *testing.T) {
 		t.Fatal("UpsertComment succeeded on PR 0")
 	}
 }
+
+// CreateComment never lists first — every call posts, unlike UpsertComment's
+// listen-then-post-or-edit — because it never looks for a comment to edit.
+func TestCreateCommentAlwaysPosts(t *testing.T) {
+	s := &commentServer{existing: []issueComment{{ID: 1, Body: marker + "\nold"}}}
+	id, err := s.client(t).CreateComment(t.Context(), "opentalon", "talooner", 42, "the answer")
+	if err != nil {
+		t.Fatalf("CreateComment: %v", err)
+	}
+	if id != 555 {
+		t.Errorf("id = %d, want 555", id)
+	}
+	if len(s.posts) != 1 || s.posts[0] != "the answer" {
+		t.Errorf("posts = %v, want exactly one carrying the body verbatim", s.posts)
+	}
+	if len(s.patches) != 0 {
+		t.Error("CreateComment edited an existing comment; it must never look one up")
+	}
+}
+
+// Two calls are two comments — the whole point of CreateComment over the
+// sticky writer, for a reply that answers one specific ask.
+func TestCreateCommentNeverDeduplicates(t *testing.T) {
+	s := &commentServer{}
+	c := s.client(t)
+	if _, err := c.CreateComment(t.Context(), "opentalon", "talooner", 42, "first answer"); err != nil {
+		t.Fatalf("CreateComment: %v", err)
+	}
+	if _, err := c.CreateComment(t.Context(), "opentalon", "talooner", 42, "second answer"); err != nil {
+		t.Fatalf("CreateComment: %v", err)
+	}
+	if len(s.posts) != 2 {
+		t.Fatalf("posts = %d, want 2: a later ask must not overwrite an earlier answer", len(s.posts))
+	}
+}
+
+func TestCreateCommentTruncatesAnOversizedBody(t *testing.T) {
+	s := &commentServer{}
+	long := strings.Repeat("é", maxCommentBytes)
+	if _, err := s.client(t).CreateComment(t.Context(), "opentalon", "talooner", 42, long); err != nil {
+		t.Fatalf("CreateComment: %v", err)
+	}
+	got := s.posts[0]
+	if len(got) > maxCommentBytes {
+		t.Errorf("posted %d bytes, over the %d cap", len(got), maxCommentBytes)
+	}
+	if !utf8.ValidString(got) {
+		t.Error("truncation cut a rune in half")
+	}
+}
+
+func TestCreateCommentRejectsAnEmptyBody(t *testing.T) {
+	s := &commentServer{}
+	if _, err := s.client(t).CreateComment(t.Context(), "opentalon", "talooner", 42, "  \n"); err == nil {
+		t.Fatal("CreateComment succeeded with a blank body")
+	}
+	if len(s.posts) != 0 {
+		t.Error("a blank body reached the API")
+	}
+}
+
+func TestCreateCommentNeedsAPullRequestNumber(t *testing.T) {
+	s := &commentServer{}
+	if _, err := s.client(t).CreateComment(t.Context(), "opentalon", "talooner", 0, "x"); err == nil {
+		t.Fatal("CreateComment succeeded on PR 0")
+	}
+}
+
+func TestCreateCommentFailsOnAWriteError(t *testing.T) {
+	s := &commentServer{writeStatus: http.StatusForbidden}
+	if _, err := s.client(t).CreateComment(t.Context(), "opentalon", "talooner", 42, "x"); err == nil {
+		t.Fatal("CreateComment succeeded despite the write failing")
+	}
+}
