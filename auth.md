@@ -232,6 +232,18 @@ branch. Consequences:
   cluster-side —
   [`talooner-plugin/llm-review.md`](https://github.com/opentalon/talooner-plugin/blob/main/llm-review.md).
 
+## Error codes
+
+Most failures surface as GitHub's own error text — that's the point of not
+hiding what broke (`internal/check`, "Talooner itself broke"). A few are common
+enough, and GitHub's response terse enough, that Talooner recognises them and
+says so plainly instead. These carry a stable `TAL-E-*` code in the check run
+and sticky comment, so a maintainer can jump straight to the fix.
+
+| Code | Meaning | Fix |
+|---|---|---|
+| `TAL-E-REVIEW-PERM` | GitHub rejected the `approve`/`block` review with 403 or 422. In every case seen, the repo or org has "Allow GitHub Actions to create and approve pull requests" turned off — a setting `GITHUB_TOKEN`'s own `permissions:` block cannot override. | Repo or org Settings → Actions → General → enable "Allow GitHub Actions to create and approve pull requests". Org-level policy can block the repo-level toggle; an org owner has to flip it there first. |
+
 ## Audit
 
 Every decision persists: facts at evaluation time, ruleset content hash, rules
