@@ -116,10 +116,20 @@ func Run(ctx context.Context, r Runner) error {
 			}
 			r.Log.Info("unsubscribed", "repo", repo, "pr", ev.PR, "actor", ev.Actor)
 			return nil
+		case command.VerbWhy:
+			// The issue_comment payload never carries a head sha (same reason the
+			// shared flow below fetches the PR again): /why answers "the current
+			// verdict", so it needs a fresh one, not the sha some earlier event
+			// named.
+			pr, err := r.GitHub.PullRequest(ctx, ev.Owner, ev.Repo, ev.PR)
+			if err != nil {
+				return fmt.Errorf("fetch %s#%d: %w", repo, ev.PR, err)
+			}
+			return r.why(ctx, repo, pr)
 		default:
-			// /why is explain_pr (its own ticket) and /plan is the head-branch
-			// dry run (E2). Both are parsed and authorized already, so this is
-			// the one place left to add them.
+			// /plan is the manual head-branch dry run (E2 built only its
+			// automatic fork-safety half). Parsed and authorized already, so
+			// this is the one place left to add it.
 			r.Log.Warn("command is not wired up yet", "verb", cmd.Verb, "repo", repo, "pr", ev.PR)
 			return nil
 		}
@@ -550,6 +560,32 @@ func (r Runner) reviewComment(ctx context.Context, repo string, pr *github.PullR
 	}
 	if err := r.sticky(ctx, comment.TopicReview, body, editOnly); err != nil {
 		return fmt.Errorf("write the review comment for %s#%d: %w", repo, r.Event.PR, err)
+	}
+	return nil
+}
+
+// why answers `/why`: the plugin's persisted decision for the PR's current
+// head sha (cluster.Client.ExplainPR), posted with GitHub.CreateComment
+// rather than through sticky — a later `/why` at a later sha is a different
+// question, not an edit to this one's answer (comment.Why).
+func (r Runner) why(ctx context.Context, repo string, pr *github.PullRequest) error {
+	resp, err := r.Cluster.ExplainPR(ctx, repo, r.Event.PR, pr.HeadSHA)
+	if err != nil {
+		if !errors.Is(err, cluster.ErrAction) {
+			return fmt.Errorf("explain %s#%d: %w", repo, r.Event.PR, err)
+		}
+		// The plugin reached a clear answer: nothing was ever evaluated at this
+		// sha. Worth telling the commander, not worth failing the run over.
+		if _, cErr := r.GitHub.CreateComment(ctx, r.Event.Owner, r.Event.Repo, r.Event.PR,
+			comment.WhyNotEvaluated(err.Error(), pr.HeadSHA)); cErr != nil {
+			return fmt.Errorf("write why-unavailable comment for %s#%d: %w", repo, r.Event.PR, cErr)
+		}
+		return nil
+	}
+
+	if _, err := r.GitHub.CreateComment(ctx, r.Event.Owner, r.Event.Repo, r.Event.PR,
+		comment.Why(resp.GetExplain(), pr.HeadSHA)); err != nil {
+		return fmt.Errorf("write why comment for %s#%d: %w", repo, r.Event.PR, err)
 	}
 	return nil
 }

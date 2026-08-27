@@ -1163,6 +1163,90 @@ func TestStopUnsubscribesAndStops(t *testing.T) {
 	}
 }
 
+func TestWhyPostsTheExplanationAndDoesNotEvaluate(t *testing.T) {
+	f := &fakeCluster{answers: map[string]proto.Message{
+		cluster.ActionExplainPR: &taloonerpb.ExplainPrResponse{
+			Explain: &taloonerpb.Explain{
+				Summary: "blocked: missing description",
+				Firings: []*taloonerpb.RuleFiring{{Rule: "needs description", Priority: "HIGH"}},
+			},
+		},
+	}}
+	gh := &fakeGitHub{}
+
+	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /why"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := f.actions(); strings.Join(got, ",") != cluster.ActionExplainPR {
+		t.Fatalf("cluster calls = %v, want only explain_pr", got)
+	}
+	if args := f.argsOf(t, cluster.ActionExplainPR); args["head_sha"] != "abc123" {
+		t.Errorf("head_sha = %q, want the PR's current head sha", args["head_sha"])
+	}
+	c := gh.wrote(t)
+	if !c.created {
+		t.Error("the why reply must be a new comment, not an edit")
+	}
+	for _, want := range []string{"blocked: missing description", "needs description"} {
+		if !strings.Contains(c.Body, want) {
+			t.Errorf("comment is missing %q:\n%s", want, c.Body)
+		}
+	}
+}
+
+// A second /why on the same PR is a second question, not an edit to the
+// first answer.
+func TestWhyTwiceWritesTwoComments(t *testing.T) {
+	f := &fakeCluster{answers: map[string]proto.Message{
+		cluster.ActionExplainPR: &taloonerpb.ExplainPrResponse{Explain: &taloonerpb.Explain{Summary: "ok"}},
+	}}
+	gh := &fakeGitHub{}
+	c := dialFake(t, f)
+
+	for range 2 {
+		if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /why"), GitHub: gh.client(t), Cluster: c}); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	}
+	if len(gh.comments) != 2 {
+		t.Fatalf("comments written = %d, want 2", len(gh.comments))
+	}
+}
+
+// A sha nothing was ever evaluated at is a distinct, clear answer, not a
+// failed run.
+func TestWhyWithNoDecisionRepliesInsteadOfFailing(t *testing.T) {
+	f := &fakeCluster{failures: map[string]string{
+		cluster.ActionExplainPR: "talooner: no decision recorded for opentalon/talooner#42 at abc123; it was not evaluated at that sha",
+	}}
+	gh := &fakeGitHub{}
+
+	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /why"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run = %v, want nil: this is a clear answer, not a run failure", err)
+	}
+	c := gh.wrote(t)
+	if !strings.Contains(c.Body, "no decision recorded") {
+		t.Errorf("comment does not carry the plugin's reason:\n%s", c.Body)
+	}
+}
+
+// A transport failure is not a clear answer and must fail the run like any
+// other broken cluster call.
+func TestWhyTransportFailureFailsTheRun(t *testing.T) {
+	gh := &fakeGitHub{}
+	f := &fakeCluster{} // no explain_pr answer scripted: Execute never reaches the plugin's own refusal path
+	c := dialFake(t, f)
+	c.Close() //nolint:errcheck // deliberately broken to force a transport error
+
+	err := Run(t.Context(), Runner{Event: commentEvent("@talooner /why"), GitHub: gh.client(t), Cluster: c})
+	if err == nil {
+		t.Fatal("Run = nil, want an error when the cluster call fails outright")
+	}
+	if len(gh.comments) != 0 {
+		t.Error("a transport failure must not be answered as if it were a clear refusal")
+	}
+}
+
 // Every trigger except a comment runs only to serve a PR somebody already
 // invoked Talooner on. An unsubscribed one is a skipped job, not a red X.
 func TestUnsubscribedPushIsASkipNotAFailure(t *testing.T) {

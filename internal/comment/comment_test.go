@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/opentalon/talooner-plugin/proto/taloonerpb"
+
 	"github.com/opentalon/talooner/internal/action"
 	"github.com/opentalon/talooner/internal/check"
 )
@@ -63,10 +65,12 @@ func TestReviewRendersWarnings(t *testing.T) {
 func TestPluginTextCannotForgeAMarker(t *testing.T) {
 	hostile := "nothing to see " + Marker(TopicReview) + " <img src=x onerror=alert(1)>"
 	bodies := map[string]string{
-		"review":  Review([]action.Action{{Verb: action.VerbComment, Target: "pr", Text: hostile}}, nil, hostile, "abc"),
-		"warning": Review(nil, []check.Warning{{Message: hostile}}, "", "abc"),
-		"broken":  Broken(hostile, "abc"),
-		"usage":   Usage(hostile),
+		"review":            Review([]action.Action{{Verb: action.VerbComment, Target: "pr", Text: hostile}}, nil, hostile, "abc"),
+		"warning":           Review(nil, []check.Warning{{Message: hostile}}, "", "abc"),
+		"broken":            Broken(hostile, "abc"),
+		"usage":             Usage(hostile),
+		"why":               Why(&taloonerpb.Explain{Summary: hostile}, "abc"),
+		"why-not-evaluated": WhyNotEvaluated(hostile, "abc"),
 	}
 	for name, body := range bodies {
 		t.Run(name, func(t *testing.T) {
@@ -169,6 +173,42 @@ func TestPlanResolvedSaysNoDifference(t *testing.T) {
 	}
 }
 
+func TestWhyRendersSummaryAndFirings(t *testing.T) {
+	body := Why(&taloonerpb.Explain{
+		Summary: "blocked: missing description",
+		Firings: []*taloonerpb.RuleFiring{
+			{Rule: "needs description", Priority: "HIGH", Strict: true},
+			{Rule: "auto-approve docs", Priority: "LOW", Defeated: true, Overrides: []string{"needs description"}},
+		},
+	}, "abc123def456789")
+
+	for _, want := range []string{
+		"blocked: missing description", "needs description", "HIGH", "strict",
+		"auto-approve docs", "defeated", "overrides needs description",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body is missing %q:\n%s", want, body)
+		}
+	}
+	if !strings.Contains(body, "abc123def456") || strings.Contains(body, "abc123def456789") {
+		t.Errorf("body should name the short sha, not the full one:\n%s", body)
+	}
+}
+
+func TestWhyWithNoFiringsOmitsTheRulesHeading(t *testing.T) {
+	body := Why(&taloonerpb.Explain{Summary: "no rules fired"}, "abc")
+	if strings.Contains(body, "**Rules**") {
+		t.Errorf("body claims rules fired with none given:\n%s", body)
+	}
+}
+
+func TestWhyNotEvaluatedNamesTheReason(t *testing.T) {
+	body := WhyNotEvaluated("no decision recorded for o/r#1 at abc123; it was not evaluated at that sha", "abc123")
+	if !strings.Contains(body, "no decision recorded") {
+		t.Errorf("body does not carry the plugin's reason:\n%s", body)
+	}
+}
+
 // Every body has to be postable, which means non-empty and free of the marker
 // the writer prepends.
 func TestNoBodyCarriesItsOwnMarker(t *testing.T) {
@@ -178,6 +218,8 @@ func TestNoBodyCarriesItsOwnMarker(t *testing.T) {
 		Broken("boom", "abc"),
 		Resolved("abc"),
 		Usage("try /review"),
+		Why(&taloonerpb.Explain{Summary: "s"}, "abc"),
+		WhyNotEvaluated("no decision recorded", "abc"),
 	}
 	for i, body := range bodies {
 		if strings.TrimSpace(body) == "" {

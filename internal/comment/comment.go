@@ -25,6 +25,8 @@ import (
 	"html"
 	"strings"
 
+	"github.com/opentalon/talooner-plugin/proto/taloonerpb"
+
 	"github.com/opentalon/talooner/internal/action"
 	"github.com/opentalon/talooner/internal/check"
 )
@@ -207,6 +209,55 @@ func Usage(text string) string {
 	b.WriteString(escape(strings.TrimSpace(text)))
 	b.WriteString("\n")
 	b.WriteString(footer(""))
+	return b.String()
+}
+
+// Why is the reply to `/why`: the plugin's persisted explanation for the
+// decision at sha (cluster.Client.ExplainPR). It is posted as a plain
+// comment, never edited — a later `/why` at a later sha is a different
+// question, not an update to this answer, unlike the ongoing verdict Review
+// keeps current in place.
+func Why(explain *taloonerpb.Explain, sha string) string {
+	var b strings.Builder
+	b.WriteString("### Talooner explain\n\n")
+	if s := strings.TrimSpace(explain.GetSummary()); s != "" {
+		b.WriteString(escape(s))
+		b.WriteString("\n\n")
+	}
+
+	if firings := explain.GetFirings(); len(firings) > 0 {
+		b.WriteString("**Rules**\n\n")
+		for _, f := range firings {
+			line := fmt.Sprintf("`%s`", escapeCode(f.GetRule()))
+			if p := f.GetPriority(); p != "" {
+				line += fmt.Sprintf(" (%s)", escape(p))
+			}
+			if f.GetStrict() {
+				line += ", strict"
+			}
+			if f.GetDefeated() {
+				line += ", defeated"
+			}
+			if overrides := f.GetOverrides(); len(overrides) > 0 {
+				line += fmt.Sprintf(" — overrides %s", escape(strings.Join(overrides, ", ")))
+			}
+			fmt.Fprintf(&b, "- %s\n", line)
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString(footer(sha))
+	return b.String()
+}
+
+// WhyNotEvaluated is the reply to `/why` when the plugin has no decision on
+// record for this PR's current head sha — a distinct, clear answer, not an
+// empty explanation that would read like "no rules fired".
+func WhyNotEvaluated(reason, sha string) string {
+	var b strings.Builder
+	b.WriteString("### Talooner explain\n\n")
+	b.WriteString(escape(strings.TrimSpace(reason)))
+	b.WriteString("\n")
+	b.WriteString(footer(sha))
 	return b.String()
 }
 
