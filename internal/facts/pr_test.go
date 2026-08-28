@@ -121,18 +121,19 @@ func TestPRAssertsEveryCoreFact(t *testing.T) {
 
 	// A fact this package forgot is a fact that reads as a dead extractor, so
 	// the count is pinned rather than left to the loop above. checks_pending,
-	// pr.diff, pr.diff_truncated and pr.new_dependencies are always asserted
-	// (an empty CI, an empty diff and zero new deps are all honest answers, not
-	// dead extractors); mergeable is not, because samplePR has none and it is the
-	// one fact that may legitimately be omitted (pr_mergeable test below).
-	// user.author and module.touched_count are always asserted too (no CODEOWNERS
-	// here, so user.owner / user.owners / user.reviewer stay unset; no modules
-	// configured, so module.touched_count reads 0). review.human.approved and
-	// review.changes_requested are always asserted too (no reviews here, so both
-	// read false); there are no teams.yaml entries or requested teams, so no
-	// review.<team>.* facts exist to count.
-	if len(got) != len(want)+6 {
-		t.Errorf("asserted %d facts, want %d", len(got), len(want)+6)
+	// pr.diff, pr.diff_truncated, pr.new_dependencies and pr.upgraded_dependencies
+	// are always asserted (an empty CI, an empty diff and zero new/upgraded deps
+	// are all honest answers, not dead extractors); mergeable is not, because
+	// samplePR has none and it is the one fact that may legitimately be omitted
+	// (pr_mergeable test below). user.author and module.touched_count are always
+	// asserted too (no CODEOWNERS here, so user.owner / user.owners /
+	// user.reviewer stay unset; no modules configured, so module.touched_count
+	// reads 0). review.human.approved and review.changes_requested are always
+	// asserted too (no reviews here, so both read false); there are no
+	// teams.yaml entries or requested teams, so no review.<team>.* facts exist
+	// to count.
+	if len(got) != len(want)+7 {
+		t.Errorf("asserted %d facts, want %d", len(got), len(want)+7)
 	}
 }
 
@@ -479,32 +480,38 @@ func TestPRDerivesPassingFacts(t *testing.T) {
 	}
 }
 
-// pr.new_dependencies is parsed from the diff C2 already fetched and is always
-// asserted — a PR that adds no dependencies gets 0, which is the honest answer,
-// not a dead extractor (facts.md, "pr.new_dependencies").
+// pr.new_dependencies / pr.upgraded_dependencies are parsed from the diff C2
+// already fetched and are always asserted — a PR that touches neither gets 0
+// for both, which is the honest answer, not a dead extractor (facts.md,
+// "pr.new_dependencies", "pr.upgraded_dependencies").
 func TestPRAssertsNewDependenciesAlways(t *testing.T) {
 	for _, tt := range []struct {
-		name string
-		diff string
-		want int
+		name         string
+		diff         string
+		want         int
+		wantUpgraded int
 	}{
-		{"no manifest in diff", "@@ -1 +1 @@\n+hello", 0},
-		{"empty diff", "", 0},
-		{"three go.mod requires added", diffGitFile("go.mod", "+require github.com/a v1.0.0\n+require github.com/b v2.0.0\n+require github.com/c v0.1.0"), 3},
-		// A version bump removes and re-adds the same name: an upgrade, not new.
-		{"go.mod upgrade is not new", diffGitFile("go.mod", "-require github.com/a v1.0.0\n+require github.com/a v2.0.0"), 0},
+		{"no manifest in diff", "@@ -1 +1 @@\n+hello", 0, 0},
+		{"empty diff", "", 0, 0},
+		{"three go.mod requires added", diffGitFile("go.mod", "+require github.com/a v1.0.0\n+require github.com/b v2.0.0\n+require github.com/c v0.1.0"), 3, 0},
+		// A version bump removes and re-adds the same name: upgraded, not new.
+		{"go.mod upgrade counts as upgraded, not new", diffGitFile("go.mod", "-require github.com/a v1.0.0\n+require github.com/a v2.0.0"), 0, 1},
+		// A removal with no matching add is neither new nor upgraded.
+		{"go.mod removal counts as neither", diffGitFile("go.mod", "-require github.com/a v1.0.0"), 0, 0},
+		// A mix of a new dep and an upgraded one in the same file counts both.
+		{"go.mod new and upgraded together", diffGitFile("go.mod", "+require github.com/a v1.0.0\n-require github.com/b v1.0.0\n+require github.com/b v2.0.0"), 1, 1},
 		// Lockfile churn alone is ignored.
-		{"go.sum churn ignored", diffGitFile("go.sum", "+github.com/a v1.0.0 h1:abc=\n+github.com/b v2.0.0 h1:def="), 0},
-		{"package-lock churn ignored", diffGitFile("package-lock.json", `+"a": {"version":"1.0.0"}`), 0},
+		{"go.sum churn ignored", diffGitFile("go.sum", "+github.com/a v1.0.0 h1:abc=\n+github.com/b v2.0.0 h1:def="), 0, 0},
+		{"package-lock churn ignored", diffGitFile("package-lock.json", `+"a": {"version":"1.0.0"}`), 0, 0},
 		// package.json deps-block entries count; a top-level field of the same
-		// shape does not, and an upgrade nets to zero.
-		{"package.json new dep", diffGitFile("package.json", "+\"dependencies\": {\n+\"leftpad\": \"1.0.0\"\n+}"), 1},
-		{"package.json upgrade ignored", diffGitFile("package.json", "+\"dependencies\": {\n-\"leftpad\": \"1.0.0\"\n+\"leftpad\": \"2.0.0\"\n+}"), 0},
+		// shape does not, and an upgrade nets to zero new but one upgraded.
+		{"package.json new dep", diffGitFile("package.json", "+\"dependencies\": {\n+\"leftpad\": \"1.0.0\"\n+}"), 1, 0},
+		{"package.json upgrade counts as upgraded", diffGitFile("package.json", "+\"dependencies\": {\n-\"leftpad\": \"1.0.0\"\n+\"leftpad\": \"2.0.0\"\n+}"), 0, 1},
 		// requirements.txt and Gemfile and Cargo.toml all count.
-		{"requirements new", diffGitFile("requirements.txt", "+requests>=2.0\n+flask==3.0"), 2},
-		{"gemfile new", diffGitFile("Gemfile", `+gem "rails"`+"\n"+`+gem 'pg'`), 2},
-		{"cargo new", diffGitFile("Cargo.toml", "[dependencies]\n+serde = \"1.0\"\n+tokio = { version = \"1\" }"), 2},
-		{"cargo package fields ignored", diffGitFile("Cargo.toml", "[package]\n+name = \"x\"\n+version = \"0.1.0\"\n+edition = \"2021\""), 0},
+		{"requirements new", diffGitFile("requirements.txt", "+requests>=2.0\n+flask==3.0"), 2, 0},
+		{"gemfile new", diffGitFile("Gemfile", `+gem "rails"`+"\n"+`+gem 'pg'`), 2, 0},
+		{"cargo new", diffGitFile("Cargo.toml", "[dependencies]\n+serde = \"1.0\"\n+tokio = { version = \"1\" }"), 2, 0},
+		{"cargo package fields ignored", diffGitFile("Cargo.toml", "[package]\n+name = \"x\"\n+version = \"0.1.0\"\n+edition = \"2021\""), 0, 0},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := PR(context.Background(),
@@ -515,11 +522,14 @@ func TestPRAssertsNewDependenciesAlways(t *testing.T) {
 			if got["pr.new_dependencies"] != tt.want {
 				t.Errorf("pr.new_dependencies = %v, want %v", got["pr.new_dependencies"], tt.want)
 			}
+			if got["pr.upgraded_dependencies"] != tt.wantUpgraded {
+				t.Errorf("pr.upgraded_dependencies = %v, want %v", got["pr.upgraded_dependencies"], tt.wantUpgraded)
+			}
 		})
 	}
 }
 
-// diffGitFile wraps a single-file patch body in the header countNewDependencies
+// diffGitFile wraps a single-file patch body in the header countDependencyChanges
 // splits on, so tests assert against the real concatenated-diff shape.
 func diffGitFile(name, body string) string {
 	return "diff --git a/" + name + " b/" + name + "\n" + body

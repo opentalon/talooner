@@ -6,30 +6,33 @@ import (
 	"strings"
 )
 
-// countNewDependencies counts dependencies newly added across the PR's
+// countDependencyChanges counts new and upgraded dependencies across the PR's
 // recognised manifest files, parsed from the concatenated unified diff
-// (facts.md, "pr.new_dependencies"). Lockfiles are ignored: churn in
-// package-lock.json, Cargo.lock, go.sum and friends is a consequence of adding a
-// dependency, not an addition itself, so counting it would double-count. A
-// dependency whose name is both added and removed in the same file is an upgrade,
-// not a new dependency, and is not counted.
+// (facts.md, "pr.new_dependencies", "pr.upgraded_dependencies"). Lockfiles are
+// ignored: churn in package-lock.json, Cargo.lock, go.sum and friends is a
+// consequence of a manifest change, not a change itself, so counting it would
+// double-count. A dependency name both added and removed in the same file is a
+// version bump — counted as upgraded, not new. A name only removed, with no
+// matching add, is neither: it's a removal, and no base rule reads that from
+// either count (issue #11).
 //
 // The diff is the one pr.diff already fetched, so this adds no API call. It reads
 // only added/removed lines; context lines are neither and are skipped.
-func countNewDependencies(diff string) int {
-	total := 0
+func countDependencyChanges(diff string) (newDeps, upgraded int) {
 	for _, f := range splitDiffFiles(diff) {
 		if !isManifest(f.name) {
 			continue
 		}
 		added, removed := parseManifestDeps(f.name, f.body)
 		for name := range added {
-			if !removed[name] {
-				total++
+			if removed[name] {
+				upgraded++
+			} else {
+				newDeps++
 			}
 		}
 	}
-	return total
+	return newDeps, upgraded
 }
 
 // diffFile is one file's slice of a concatenated diff: its path and the raw
@@ -90,7 +93,8 @@ func diffName(line string) string {
 	return strings.TrimPrefix(fields[1], "b/")
 }
 
-// manifestNames are the manifests pr.new_dependencies knows how to parse. The
+// manifestNames are the manifests pr.new_dependencies and pr.upgraded_dependencies
+// know how to parse. The
 // set is deliberately narrow: a format we misread counts the wrong number of
 // dependencies, and no base rule depends on this fact, so a format we do not
 // recognise is safer left at zero than guessed (facts.md). Extend here.
@@ -102,9 +106,9 @@ var manifestNames = map[string]bool{
 	"Cargo.toml":       true,
 }
 
-// isLockfile reports whether name is a lockfile, which pr.new_dependencies must
-// not read. Anything ending in `.lock` is treated as one; the rest are named
-// explicitly because their extensions vary.
+// isLockfile reports whether name is a lockfile, which pr.new_dependencies and
+// pr.upgraded_dependencies must not read. Anything ending in `.lock` is treated
+// as one; the rest are named explicitly because their extensions vary.
 func isLockfile(name string) bool {
 	if strings.HasSuffix(name, ".lock") {
 		return true
