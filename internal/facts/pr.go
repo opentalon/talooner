@@ -143,8 +143,13 @@ func PR(ctx context.Context, src Source, owner, repo string, number int, checks 
 	// "pr.upgraded_dependencies"). Both always asserted: a PR with none of either
 	// gets 0, which is the honest answer, not a dead extractor. Lockfile churn is
 	// excluded from both; a version bump counts toward upgraded, never new
-	// (issue #11).
-	newDeps, upgradedDeps := countDependencyChanges(diff)
+	// (issue #11). A manifest GitHub could not diff (binary, oversized) fails the
+	// whole extraction instead of a confident zero — same rule as every other
+	// extractor in this package (package comment).
+	newDeps, upgradedDeps, err := countDependencyChanges(diff, stats)
+	if err != nil {
+		return nil, fmt.Errorf("extract pr.new_dependencies / pr.upgraded_dependencies for %s/%s#%d: %w", owner, repo, number, err)
+	}
 	s.Int("pr.new_dependencies", newDeps)
 	s.Int("pr.upgraded_dependencies", upgradedDeps)
 	// mergeable is the one fact GitHub computes asynchronously and returns null

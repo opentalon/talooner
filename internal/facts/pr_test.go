@@ -535,6 +535,61 @@ func diffGitFile(name, body string) string {
 	return "diff --git a/" + name + " b/" + name + "\n" + body
 }
 
+// A manifest with real additions/deletions in the changed-file stats but no
+// matching entry in pr.diff is GitHub's null-patch case (binary or oversized
+// file): pr.diff (C2) drops it entirely, so there is nothing for the parser to
+// read. That must fail the whole extraction, not report a confident zero
+// (issue #11, facts.md "An unparseable manifest fails the whole extraction").
+func TestPRFailsOnManifestWithNoReadableDiff(t *testing.T) {
+	src := fakeSource{
+		pr:        samplePR(),
+		diff:      "@@ -1 +1 @@\n+hello",
+		fileStats: []github.FileStat{{Path: "go.mod", Additions: 5, Deletions: 2}},
+	}
+	_, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil)
+	if err == nil {
+		t.Fatal("PR: want error for a manifest absent from the diff, got nil")
+	}
+}
+
+// A manifest present in the diff, even with no recognised dependency line
+// inside it (a pure reformat), is not unparseable — it read fine, it just had
+// nothing to count. Zero is still the honest answer there.
+func TestPRManifestInDiffWithNoDepLinesIsZeroNotError(t *testing.T) {
+	src := fakeSource{
+		pr:        samplePR(),
+		diff:      diffGitFile("go.mod", " module example.com/x\n\n go 1.24"),
+		fileStats: []github.FileStat{{Path: "go.mod", Additions: 1, Deletions: 1}},
+	}
+	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("PR: %v", err)
+	}
+	if got["pr.new_dependencies"] != 0 || got["pr.upgraded_dependencies"] != 0 {
+		t.Errorf("pr.new_dependencies/pr.upgraded_dependencies = %v/%v, want 0/0",
+			got["pr.new_dependencies"], got["pr.upgraded_dependencies"])
+	}
+}
+
+// A manifest that shows up in stats with zero net change (a pure rename, no
+// content touched) never enters the diff either, but that is not an error:
+// nothing textual changed, so zero is correct, not a guess.
+func TestPRManifestWithNoStatChangeIsNotUnparseable(t *testing.T) {
+	src := fakeSource{
+		pr:        samplePR(),
+		diff:      "@@ -1 +1 @@\n+hello",
+		fileStats: []github.FileStat{{Path: "go.mod", Additions: 0, Deletions: 0}},
+	}
+	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("PR: %v", err)
+	}
+	if got["pr.new_dependencies"] != 0 || got["pr.upgraded_dependencies"] != 0 {
+		t.Errorf("pr.new_dependencies/pr.upgraded_dependencies = %v/%v, want 0/0",
+			got["pr.new_dependencies"], got["pr.upgraded_dependencies"])
+	}
+}
+
 func TestPRLeavesPassingFactsUnsetWithoutPatterns(t *testing.T) {
 	checks := github.Checks{
 		Runs: []github.CheckRunReport{{Name: "test", Status: "completed", Conclusion: "success"}},

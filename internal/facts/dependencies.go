@@ -1,9 +1,12 @@
 package facts
 
 import (
+	"fmt"
 	"path"
 	"regexp"
 	"strings"
+
+	"github.com/opentalon/talooner/internal/github"
 )
 
 // countDependencyChanges counts new and upgraded dependencies across the PR's
@@ -16,13 +19,25 @@ import (
 // matching add, is neither: it's a removal, and no base rule reads that from
 // either count (issue #11).
 //
+// stats is the PR's changed-file list (C2 already fetched, no extra API call
+// either). It is what catches the case the diff alone cannot: a manifest with
+// real additions/deletions that contributes nothing to diff — GitHub's Files
+// API returns a null patch for binary or oversized files, and Diff (C2) drops
+// those files entirely rather than representing them. Without stats, that
+// manifest would silently read as untouched and count zero — a confident
+// "no security review needed" the bot never actually checked. A manifest that
+// shows real changes in stats but never appears in the diff is refused as an
+// error instead (issue #11): zero here would be a guess, not an answer.
+//
 // The diff is the one pr.diff already fetched, so this adds no API call. It reads
 // only added/removed lines; context lines are neither and are skipped.
-func countDependencyChanges(diff string) (newDeps, upgraded int) {
+func countDependencyChanges(diff string, stats []github.FileStat) (newDeps, upgraded int, err error) {
+	present := map[string]bool{}
 	for _, f := range splitDiffFiles(diff) {
 		if !isManifest(f.name) {
 			continue
 		}
+		present[f.name] = true
 		added, removed := parseManifestDeps(f.name, f.body)
 		for name := range added {
 			if removed[name] {
@@ -32,7 +47,15 @@ func countDependencyChanges(diff string) (newDeps, upgraded int) {
 			}
 		}
 	}
-	return newDeps, upgraded
+	for _, stat := range stats {
+		if !isManifest(stat.Path) || stat.Additions+stat.Deletions == 0 {
+			continue
+		}
+		if !present[stat.Path] {
+			return 0, 0, fmt.Errorf("manifest %s changed (+%d/-%d) but has no readable diff, refusing to count dependencies as zero", stat.Path, stat.Additions, stat.Deletions)
+		}
+	}
+	return newDeps, upgraded, nil
 }
 
 // diffFile is one file's slice of a concatenated diff: its path and the raw

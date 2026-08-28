@@ -223,6 +223,18 @@ counts the wrong number of dependencies, and no base rule depends on this fact,
 so a format it does not recognise is safer left at zero than guessed. Extend
 `manifestNames` in `internal/facts/dependencies.go` to add one.
 
+**An unparseable manifest fails the whole extraction, not a confident zero**
+(issue #11). A manifest that shows real additions/deletions in the PR's
+changed-file stats (C2 already fetches these too — no extra API call) but
+never appears in `pr.diff` — GitHub's Files API returns a null patch for
+binary or oversized files, and `pr.diff` drops those files entirely — cannot
+be read at all, so `0` here would be a guess, not the honest "no dependency
+changes" answer. That case errors the whole `PR` extraction, same as any other
+extractor that cannot produce its full set (package comment,
+`internal/facts/facts.go`). A manifest reformatted with no semantic change is
+unaffected: it's present in the diff, just with nothing the parser reads as a
+dependency line, so it still reads `0`.
+
 ## `user.*` — who is responsible for this code
 
 The person a rule wants to tag. Distinct from `pr.author`: the author wrote the
