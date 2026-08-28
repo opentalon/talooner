@@ -126,10 +126,15 @@ func Run(ctx context.Context, r Runner) error {
 				return fmt.Errorf("fetch %s#%d: %w", repo, ev.PR, err)
 			}
 			return r.why(ctx, repo, pr)
+		case command.VerbPlan:
+			// Same reason as VerbWhy: the issue_comment payload never carries a
+			// head sha, and /plan answers "right now", so it needs a fresh PR.
+			pr, err := r.GitHub.PullRequest(ctx, ev.Owner, ev.Repo, ev.PR)
+			if err != nil {
+				return fmt.Errorf("fetch %s#%d: %w", repo, ev.PR, err)
+			}
+			return r.planReply(ctx, repo, pr)
 		default:
-			// /plan is the manual head-branch dry run (E2 built only its
-			// automatic fork-safety half). Parsed and authorized already, so
-			// this is the one place left to add it.
 			r.Log.Warn("command is not wired up yet", "verb", cmd.Verb, "repo", repo, "pr", ev.PR)
 			return nil
 		}
@@ -586,6 +591,89 @@ func (r Runner) why(ctx context.Context, repo string, pr *github.PullRequest) er
 	if _, err := r.GitHub.CreateComment(ctx, r.Event.Owner, r.Event.Repo, r.Event.PR,
 		comment.Why(resp.GetExplain(), pr.HeadSHA)); err != nil {
 		return fmt.Errorf("write why comment for %s#%d: %w", repo, r.Event.PR, err)
+	}
+	return nil
+}
+
+// planReply answers the manual `/plan`: what the head-branch ruleset would
+// decide right now, evaluated in cluster.ModePlan so nothing here is ever
+// written — ModePlan's response carries the decision in a field EvaluatePR
+// itself refuses to populate with anything a caller could execute. Facts still
+// come from the base branch, the same fork-safety rule evaluate() follows, so
+// a plan and a real run never see different facts for the same PR.
+//
+// Posted as a plain new comment, the same shape as why: this answers one
+// specific ask at one specific sha, not an ongoing verdict to keep current in
+// place like the sticky TopicPlan diff E2 posts automatically on fork PRs —
+// that one compares base decision against head ruleset; this one has no base
+// to compare against, it just answers "what would /review decide".
+func (r Runner) planReply(ctx context.Context, repo string, pr *github.PullRequest) error {
+	ev := r.Event
+
+	cfg, err := r.loadConfig(ctx, ev.Owner, ev.Repo, pr.BaseRef)
+	if err != nil {
+		return fmt.Errorf("load config for %s#%d: %w", repo, ev.PR, err)
+	}
+	codeowners, err := r.loadCodeowners(ctx, ev.Owner, ev.Repo, pr.BaseRef)
+	if err != nil {
+		return fmt.Errorf("load codeowners for %s#%d: %w", repo, ev.PR, err)
+	}
+	modules, err := r.loadModules(ctx, ev.Owner, ev.Repo, pr.BaseRef)
+	if err != nil {
+		return fmt.Errorf("load modules for %s#%d: %w", repo, ev.PR, err)
+	}
+	teams, err := r.loadTeams(ctx, ev.Owner, ev.Repo, pr.BaseRef)
+	if err != nil {
+		return fmt.Errorf("load teams for %s#%d: %w", repo, ev.PR, err)
+	}
+
+	ruleset, err := r.GitHub.FileContent(ctx, ev.Owner, ev.Repo, RulesetPath, pr.HeadSHA)
+	if errors.Is(err, github.ErrNotFound) {
+		if _, cErr := r.GitHub.CreateComment(ctx, ev.Owner, ev.Repo, ev.PR,
+			comment.PlanNoRuleset(RulesetPath, pr.HeadSHA)); cErr != nil {
+			return fmt.Errorf("write plan-no-ruleset comment for %s#%d: %w", repo, ev.PR, cErr)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("load head ruleset for %s#%d: %w", repo, ev.PR, err)
+	}
+
+	set, err := facts.PR(ctx, r.GitHub, ev.Owner, ev.Repo, ev.PR, cfg.Checks, codeowners, modules, teams)
+	if err != nil {
+		return err // already names the repo and PR, and is never partial
+	}
+
+	resp, err := r.Cluster.EvaluatePR(ctx, cluster.EvaluateRequest{
+		Repo:    repo,
+		PR:      ev.PR,
+		HeadSHA: pr.HeadSHA,
+		Facts:   set,
+		Ruleset: string(ruleset),
+		Mode:    cluster.ModePlan,
+	})
+	if err != nil {
+		if !errors.Is(err, cluster.ErrAction) {
+			return fmt.Errorf("evaluate plan for %s#%d: %w", repo, ev.PR, err)
+		}
+		// The plugin ran and refused, most likely a head ruleset that will not
+		// compile. Worth telling the commander, not worth failing the run over —
+		// the same call why makes for a sha with no recorded decision.
+		if _, cErr := r.GitHub.CreateComment(ctx, ev.Owner, ev.Repo, ev.PR,
+			comment.PlanBroken(err.Error(), pr.HeadSHA)); cErr != nil {
+			return fmt.Errorf("write plan-broken comment for %s#%d: %w", repo, ev.PR, cErr)
+		}
+		return nil
+	}
+
+	actions, err := action.FromProtos(resp.GetPlan())
+	if err != nil {
+		return fmt.Errorf("decode the plan for %s#%d: %w", repo, ev.PR, err)
+	}
+
+	if _, err := r.GitHub.CreateComment(ctx, ev.Owner, ev.Repo, ev.PR,
+		comment.PlanNow(actions, pr.HeadSHA)); err != nil {
+		return fmt.Errorf("write plan comment for %s#%d: %w", repo, ev.PR, err)
 	}
 	return nil
 }
