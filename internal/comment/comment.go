@@ -199,6 +199,61 @@ func PlanResolved(sha string) string {
 	return b.String()
 }
 
+// PlanNow is the reply to a manual `/plan`: what the head-branch ruleset would
+// decide right now, evaluated with no writes. Unlike Plan (E2's automatic
+// fork-PR diff), there is no base decision to compare against here — this is
+// the decision itself, posted once as a plain comment rather than kept
+// current in a sticky one, the same shape as Why.
+func PlanNow(actions []action.Action, sha string) string {
+	var b strings.Builder
+	b.WriteString("### Talooner plan\n\n")
+	b.WriteString("This is what the head branch's own ruleset would decide right now, " +
+		"evaluated with no writes.\n\n")
+
+	findings := comments(actions)
+	if len(findings) > 0 {
+		b.WriteString("**Findings**\n\n")
+		for _, a := range findings {
+			b.WriteString(escape(strings.TrimSpace(a.Text)))
+			b.WriteString("\n\n")
+		}
+	}
+
+	if other := performed(actions); len(other) > 0 {
+		b.WriteString("**Would also do**\n\n")
+		for _, a := range other {
+			fmt.Fprintf(&b, "- %s\n", escape(action.Describe(a)))
+		}
+		b.WriteString("\n")
+	} else if len(findings) == 0 {
+		b.WriteString("No rules fired.\n\n")
+	}
+
+	b.WriteString(footer(sha))
+	return b.String()
+}
+
+// PlanNoRuleset is the reply to `/plan` when the head branch carries no
+// ruleset at path to evaluate.
+func PlanNoRuleset(path, sha string) string {
+	var b strings.Builder
+	b.WriteString("### Talooner plan\n\n")
+	fmt.Fprintf(&b, "No `%s` was found on the head branch, so there is nothing to plan.\n", escape(path))
+	b.WriteString(footer(sha))
+	return b.String()
+}
+
+// PlanBroken is the reply to `/plan` when the head-branch ruleset will not
+// compile. Same shape as WhyNotEvaluated: a clear answer, not a run failure.
+func PlanBroken(reason, sha string) string {
+	var b strings.Builder
+	b.WriteString("### Talooner plan\n\n")
+	b.WriteString(escape(strings.TrimSpace(reason)))
+	b.WriteString("\n")
+	b.WriteString(footer(sha))
+	return b.String()
+}
+
 // Usage is the one reply a command Talooner does not understand gets. The
 // caller has already established that the commander has write access; replying
 // to anyone else advertises the bot and hands them a way to make it post

@@ -1247,6 +1247,122 @@ func TestWhyTransportFailureFailsTheRun(t *testing.T) {
 	}
 }
 
+// H2 (#70): the manual `/plan` evaluates the head-branch ruleset in plan mode
+// and posts what it would decide right now, with no writes. Different from
+// E2's automatic fork-PR diff (TestForkPRPostsTheDecisionDiffAgainstTheBaseRuleset
+// et al. above): this has no base decision to compare against, just the plan
+// itself, and it never fires automatically.
+
+func TestPlanPostsWhatTheHeadRulesetWouldDecide(t *testing.T) {
+	f := &fakeCluster{
+		planAnswer: &taloonerpb.EvaluatePrResponse{
+			Plan: []*taloonerpb.Action{
+				{Verb: taloonerpb.Verb_VERB_COMMENT, Target: "pr", Text: "describe your change"},
+				{Verb: taloonerpb.Verb_VERB_BLOCK, Target: "pr"},
+			},
+		},
+	}
+	gh := &fakeGitHub{}
+
+	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /plan"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if args := f.argsOf(t, cluster.ActionEvaluatePR); args["mode"] != "plan" {
+		t.Errorf("mode = %q, want plan", args["mode"])
+	}
+	c := gh.wrote(t)
+	if !c.created {
+		t.Error("the plan reply must be a new comment, not an edit")
+	}
+	for _, want := range []string{"describe your change", "block pr"} {
+		if !strings.Contains(c.Body, want) {
+			t.Errorf("comment is missing %q:\n%s", want, c.Body)
+		}
+	}
+}
+
+// /plan must never subscribe the PR or touch subscription state at all — only
+// /review and /stop do.
+func TestPlanDoesNotSubscribe(t *testing.T) {
+	f := &fakeCluster{planAnswer: &taloonerpb.EvaluatePrResponse{}}
+	gh := &fakeGitHub{}
+
+	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /plan"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, name := range f.actions() {
+		if name == cluster.ActionSetSubscription || name == cluster.ActionIsSubscribed {
+			t.Errorf("plan touched subscription state via %s", name)
+		}
+	}
+}
+
+// A ruleset with nothing in it is a legitimate plan outcome, not an error.
+func TestPlanWithNoFiringsSaysSo(t *testing.T) {
+	f := &fakeCluster{planAnswer: &taloonerpb.EvaluatePrResponse{}}
+	gh := &fakeGitHub{}
+
+	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /plan"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	c := gh.wrote(t)
+	if !strings.Contains(c.Body, "No rules fired") {
+		t.Errorf("comment does not say no rules fired:\n%s", c.Body)
+	}
+}
+
+// No ruleset on the head branch is an answer, not an error: there is nothing
+// to plan.
+func TestPlanWithNoHeadRulesetRepliesInsteadOfEvaluating(t *testing.T) {
+	f := &fakeCluster{}
+	gh := &fakeGitHub{noRuleset: true}
+
+	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /plan"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := f.actions(); len(got) != 0 {
+		t.Errorf("cluster calls = %v, want none: no ruleset means nothing to evaluate", got)
+	}
+	c := gh.wrote(t)
+	if !strings.Contains(c.Body, RulesetPath) {
+		t.Errorf("comment does not name %s:\n%s", RulesetPath, c.Body)
+	}
+}
+
+// A head ruleset that will not compile is a clear answer, not a run failure —
+// the same call why makes for a sha with no recorded decision.
+func TestPlanWithBrokenRulesetRepliesInsteadOfFailing(t *testing.T) {
+	f := &fakeCluster{failures: map[string]string{
+		cluster.ActionEvaluatePR: "talooner: ruleset does not compile: line 3: unexpected token",
+	}}
+	gh := &fakeGitHub{}
+
+	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /plan"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run = %v, want nil: this is a clear answer, not a run failure", err)
+	}
+	c := gh.wrote(t)
+	if !strings.Contains(c.Body, "does not compile") {
+		t.Errorf("comment does not carry the plugin's reason:\n%s", c.Body)
+	}
+}
+
+// A transport failure is not a clear answer and must fail the run like any
+// other broken cluster call.
+func TestPlanTransportFailureFailsTheRun(t *testing.T) {
+	gh := &fakeGitHub{}
+	f := &fakeCluster{} // no evaluate_pr answer scripted: Execute never reaches the plugin's own refusal path
+	c := dialFake(t, f)
+	c.Close() //nolint:errcheck // deliberately broken to force a transport error
+
+	err := Run(t.Context(), Runner{Event: commentEvent("@talooner /plan"), GitHub: gh.client(t), Cluster: c})
+	if err == nil {
+		t.Fatal("Run = nil, want an error when the cluster call fails outright")
+	}
+	if len(gh.comments) != 0 {
+		t.Error("a transport failure must not be answered as if it were a clear refusal")
+	}
+}
+
 // Every trigger except a comment runs only to serve a PR somebody already
 // invoked Talooner on. An unsubscribed one is a skipped job, not a red X.
 func TestUnsubscribedPushIsASkipNotAFailure(t *testing.T) {
