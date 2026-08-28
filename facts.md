@@ -83,6 +83,7 @@ false":
 | `pr.diff` | string | Files API patches, concatenated and size-capped at 1 MiB |
 | `pr.diff_truncated` | bool | true when `pr.diff` hit the cap and was cut short (issue #9) |
 | `pr.new_dependencies` | int | manifest diff — see below |
+| `pr.upgraded_dependencies` | int | manifest diff — see below |
 
 ### `pr.mergeable` and `pr.checks_pending`
 
@@ -182,12 +183,18 @@ The unhappy paths that define the cap — exactly at, one byte over, one byte un
 a binary file, and individually-small patches that collectively exceed it — all
 behave so that a truncated diff is always flagged, never silent.
 
-### `pr.new_dependencies`
+### `pr.new_dependencies` / `pr.upgraded_dependencies`
 
-Count of dependencies newly added across recognised manifests, parsed from
-`pr.diff` (the diff C2 already fetches — no extra API call). It is asserted
-always: a PR that adds none gets `0`, which is the honest answer and reads as
-"no security review needed", not a dead extractor.
+Counts of dependencies newly added, and version-bumped, across recognised
+manifests, parsed from `pr.diff` (the diff C2 already fetches — no extra API
+call). Both are asserted always: a PR that touches none of either gets `0`,
+which is the honest answer and reads as "no security review needed", not a
+dead extractor.
+
+A dependency name both added and removed in the same manifest file is a
+version bump — it counts toward `pr.upgraded_dependencies`, never
+`pr.new_dependencies`. A name only removed, with no matching add, is a plain
+removal and counts toward neither (issue #11).
 
 Recognised manifests (matched by basename, in any directory):
 
@@ -205,7 +212,7 @@ Recognised manifests (matched by basename, in any directory):
 Lockfiles are **not** read — `go.sum`, `package-lock.json`, `yarn.lock`,
 `pnpm-lock.yaml`, `Gemfile.lock`, `Cargo.lock`, `composer.lock`, `poetry.lock`,
 `Pipfile.lock` and anything ending in `.lock`. Lockfile churn is a *consequence*
-of adding a dependency, so counting it would double-count.
+of a manifest change, so counting it would double-count.
 
 **Version bumps are not new dependencies.** Within a file, a dependency whose
 name is both added and removed in the same diff is an upgrade, and is excluded
