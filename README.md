@@ -121,6 +121,7 @@ claim no LLM-based reviewer can make.
 | [`docs/actions.md`](docs/actions.md) | Action catalog, GitHub semantics, conflict resolution, App permissions |
 | [`docs/auth.md`](docs/auth.md) | Credentials, onboarding CLI, untrusted input, audit |
 | [`docs/deployment-and-setup.md`](docs/deployment-and-setup.md) | Practical walkthrough: load the plugin into a cluster, wire up a repo |
+| [`docs/version-skew.md`](docs/version-skew.md) | Action version vs. plugin version: the `protocol_version` handshake, which side checks which direction of skew, landing order for contract changes |
 | [`docs/expert-review-system.md`](docs/expert-review-system.md) | **Not yet built.** Specification for the LLM-review feature — per-`code_unit` review, `doc_ref`/`diff_slice`, host-delegated `tool "llm" "review"` call, cache keying, build order. Supersedes the `llm_review.*` shape described in `docs/facts.md`/`docs/architecture.md`/`docs/diagrams.md` before that shape ever shipped. |
 
 Phasing and remaining work live in the
