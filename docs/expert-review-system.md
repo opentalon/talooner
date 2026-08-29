@@ -178,6 +178,11 @@ loop.
 
 ### Phase 1 — talooner: codebase-knowledge fact layer
 
+**Shipped 2026-08-29.** `internal/facts/architecture.go` + `config.ParseArchitecture`.
+See `docs/facts.md`, "`code.*` — the LLM-review gate" for the fact table and the
+built-in layer conventions actually implemented. Below is the original build plan,
+left as-is for context.
+
 The gate that decides what's worth sending to the LLM. Mirrors the existing `module.*`
 extractor pattern.
 

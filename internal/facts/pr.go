@@ -68,7 +68,13 @@ type Source interface {
 // the same way; it is also what review.<team>.* asserts facts for, so a
 // logical name a ruleset requires review from is the same name it reads
 // review facts back on.
-func PR(ctx context.Context, src Source, owner, repo string, number int, checks config.Checks, codeowners []byte, modules []config.Module, teams config.Teams) (Set, error) {
+//
+// arch is the repo's .github/talooner/architecture.yaml
+// (expert-review-system.md, Phase 1), read the same way; it overrides or
+// extends the built-in per-language layer conventions that decide which
+// code.* roll-up a touched file counts toward. An empty slice means the repo
+// declared no overrides — the built-in conventions decide alone.
+func PR(ctx context.Context, src Source, owner, repo string, number int, checks config.Checks, codeowners []byte, modules []config.Module, teams config.Teams, arch []config.ArchitectureRule) (Set, error) {
 	type prResult struct {
 		pr  *github.PullRequest
 		err error
@@ -192,6 +198,12 @@ func PR(ctx context.Context, src Source, owner, repo string, number int, checks 
 	// by most changed lines, with module.touched_count always asserted. The file
 	// stats are already in hand from the ChangedFileStats fetch above.
 	moduleFacts(s, stats, modules)
+	// code.* facts (facts.md, "code.*"): the LLM-review gate
+	// (expert-review-system.md, Phase 1). The code_unit records themselves
+	// are not returned yet — Phase 2 adds the wire field that carries them to
+	// the cluster — but the roll-up facts a ruleset gates on today are
+	// asserted here, next to module.*.
+	architectureFacts(s, stats, diff, arch)
 	// review.* facts (facts.md, "review.*"): folded from the whole review
 	// history fetched above, against the touched paths and the team lookup
 	// table already read for the require resolver.

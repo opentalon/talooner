@@ -40,7 +40,7 @@ func TestReviewHumanApproved(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := PR(context.Background(), fakeSource{pr: reviewPR(), reviews: tt.reviews},
-				"opentalon", "talooner", 42, config.Checks{}, nil, nil, nil)
+				"opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 			if err != nil {
 				t.Fatalf("PR: %v", err)
 			}
@@ -77,7 +77,7 @@ func TestReviewChangesRequestedFoldsToLatestDecision(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := PR(context.Background(), fakeSource{pr: reviewPR(), reviews: tt.reviews},
-				"opentalon", "talooner", 42, config.Checks{}, nil, nil, nil)
+				"opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 			if err != nil {
 				t.Fatalf("PR: %v", err)
 			}
@@ -145,7 +145,7 @@ func TestReviewTeamFacts(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			src := fakeSource{pr: pr, files: []string{"critical/x.go"}, reviews: tt.reviews}
-			got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, []byte(co), nil, teams)
+			got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, []byte(co), nil, teams, nil)
 			if err != nil {
 				t.Fatalf("PR: %v", err)
 			}
@@ -165,7 +165,7 @@ func TestReviewTeamFactsPathDerivedFallback(t *testing.T) {
 	pr := reviewPR()
 	pr.Requested.Teams = []string{"security"}
 
-	got, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil)
+	got, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestReviewTeamFactsDoNotDuplicateAcrossNames(t *testing.T) {
 	pr := reviewPR()
 	pr.Requested.Teams = []string{"security"} // same team teams.yaml already names
 
-	got, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, teams)
+	got, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, teams, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestReviewTeamFactsDoNotDuplicateAcrossNames(t *testing.T) {
 func TestReviewFetchFailureReturnsNoPartialSet(t *testing.T) {
 	boom := errors.New("boom")
 	got, err := PR(context.Background(), fakeSource{pr: samplePR(), reviewErr: boom},
-		"opentalon", "talooner", 42, config.Checks{}, nil, nil, nil)
+		"opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 	if err == nil {
 		t.Fatal("err = nil, want the fetch failure")
 	}
