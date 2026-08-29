@@ -1,8 +1,18 @@
 # Talooner — architecture
 
+> **`llm_review` described below is unimplemented.** This document's request
+> flow, determinism section, and `module.*` framing describe the PR-level
+> design as originally planned and as the code is structured today (no
+> `llm_review` executor, no `code_unit`, no per-unit cache exists in this
+> repo or `talooner-plugin`). The design actually being built is per-unit,
+> not per-PR — see [`expert-review-system.md`](expert-review-system.md) for
+> the current specification and decisions. Sections below are corrected
+> against the current code where they'd drifted independent of that change;
+> where `llm_review` specifics appear, read them as historical intent.
+
 ## What it is
 
-A GitHub Action that reviews pull requests by running the repo's own Talon
+A GitHub Action that reviews pull requests by running the repo's own tln
 ruleset. No model decides anything. Rules decide; an LLM is consulted only where
 a rule says `do llm_review ...`, and its answer re-enters the engine as a fact.
 
@@ -31,13 +41,13 @@ no shared anything.
 │            │                 │            │ ┌────────────────┐ │
 │            │ native event    │   gRPC     │ │ talooner-plugin│ │
 │            ▼                 │───────────▶│ │ • ruleset store│ │
-│  ┌────────────────────────┐  │◀───────────│ │ • Talon engine │ │
+│  ┌────────────────────────┐  │◀───────────│ │ • tln engine   │ │
 │  │ Actions runner         │  │            │ │ • llm_review   │ │
 │  │  opentalon/talooner@v1 │  │            │ │ • explain/audit│ │
 │  │  • fact extraction     │  │            │ └───────┬────────┘ │
 │  │  • action exec         │  │            │         │          │
 │  │  • EPHEMERAL           │  │            │   ┌─────▼──────┐   │
-│  └────────────────────────┘  │            │   │  talon-db  │   │
+│  └────────────────────────┘  │            │   │  tln-db    │   │
 │            │ GITHUB_TOKEN    │            │   │ PR facts   │   │
 │            ▼                 │            │   │ decisions  │   │
 │  reviews · comments · checks │            │   └────────────┘   │
@@ -62,15 +72,15 @@ cluster-side.
 | Triggering | GitHub Actions | Native events. No webhook receiver, no HMAC, no delivery queue, no 10s deadline |
 | GitHub credentials | Actions runtime | `GITHUB_TOKEN`, minted per run, scoped to one repo, expires when the job ends |
 | Fact extraction from the GitHub API | action | Only the runner holds a token |
-| Fact storage, reactive `changes` operator | plugin → talon-db | Facts must outlive a run that lasts 30 seconds |
+| Fact storage, reactive `changes` operator | plugin → tln-db | Facts must outlive a run that lasts 30 seconds |
 | Ruleset parse, validate, compile | plugin | Rules are evaluated where facts live |
-| Talon engine, defeasible resolution | plugin | Same |
+| tln engine, defeasible resolution | plugin | Same |
 | `llm_review` | plugin | Only the cluster holds tenant LLM credentials |
-| `explain` / audit trail | plugin → talon-db | Decisions are queried long after the PR closes |
+| `explain` / audit trail | plugin → tln-db | Decisions are queried long after the PR closes |
 | Action execution against GitHub | action | Only the runner holds a token |
 
-The seam is: **the action knows GitHub and knows nothing about Talon; the plugin
-knows Talon and knows nothing about GitHub.** The plugin returns an abstract
+The seam is: **the action knows GitHub and knows nothing about tln; the plugin
+knows tln and knows nothing about GitHub.** The plugin returns an abstract
 action list; the action translates it into API calls. That keeps
 `talooner-plugin` testable without a GitHub fixture, and keeps the GitHub half
 free of engine state.
@@ -79,7 +89,7 @@ free of engine state.
 
 It cannot. A workflow run is a fresh container that exits when the job ends.
 Everything that must survive between events — facts, subscriptions, decisions,
-`explain` output, `llm_review` results — is in `talon-db` already, because
+`explain` output, `llm_review` results — is in `tln-db` already, because
 reactive rules (`when "pr.files_changed" changes`) required that regardless.
 
 Subscription state (which PRs were invoked with `@talooner /review`) is state
@@ -139,7 +149,7 @@ talooner/
     event/                # parse GITHUB_EVENT_PATH into {repo, pr, trigger}
     command/              # @talooner /review /stop /why /plan + write-access gate
     facts/                # extractors: diff, checks, CODEOWNERS, modules, teams
-    action/               # executor interface + one file per Talon verb
+    action/               # executor interface + one file per tln verb
       executor.go         #   interface + registry keyed by verb
       github.go           #   real writes
       printer.go          #   dry run — this is `rules plan`
@@ -158,13 +168,13 @@ Three things this layout is deliberately encoding:
 
 **`command/` and `action/` are not the same concept.** A *command* is a human
 typing `@talooner /review` in a PR comment — it arrives in the event payload, is
-gated on write access, and decides *whether to evaluate*. An *action* is a Talon verb
+gated on write access, and decides *whether to evaluate*. An *action* is a tln verb
 the plugin returned — it arrives as data from the engine and decides *what to do
 to GitHub*. Different inputs, different auth, different tests. Collapsing them
 into one package makes the write-access gate ambiguous, which is a security
 control, not a stylistic detail.
 
-**Action file names match Talon verbs exactly.** The plugin returns
+**Action file names match tln verbs exactly.** The plugin returns
 `{"verb": "approve", ...}` as a string; the bot dispatches through a registry
 keyed by that string. If the file is `approve.go` and the verb is `approve`,
 adding a verb to the DSL and adding a file stay in lockstep, and an unknown verb
@@ -186,10 +196,10 @@ workspace, and `internal/` is enforced by the compiler rather than by agreement.
 
 ### Dependency chain
 
-The bot links neither `talon-language` nor `talon-db` — it only speaks the
+The bot links neither `tln-language` nor `tln-db` — it only speaks the
 plugin's contract, consuming the generated Go package as a normal tagged
 dependency. That mirrors `opentalon-agents`, which deliberately links no
-`talon-language` code, and it's why the bot builds without a sibling `talon-db/`
+`tln-language` code, and it's why the bot builds without a sibling `tln-db/`
 checkout.
 
 The plugin does link both, and therefore inherits the workspace's `replace`
@@ -267,13 +277,13 @@ answered.
 
 ### No reactive wake in v1
 
-Talon's reactive rules still work — they fire when facts change *during* an
+tln's reactive rules still work — they fire when facts change *during* an
 evaluation. What v1 does not have is anything to notice a fact changing while no
 run is in progress.
 
 Concretely: your CI POSTs `preview.status = "deployed"` an hour after the last
 run. The engine has no process to wake, and the cluster deliberately holds no
-GitHub credentials, so it cannot comment on its own. The fact sits in `talon-db`
+GitHub credentials, so it cannot comment on its own. The fact sits in `tln-db`
 until the next evaluation, which a maintainer triggers with `/review`.
 
 This is accepted for v1, not overlooked. The alternatives all cost something:
@@ -316,7 +326,7 @@ runner starts with {repo, pr, event, GITHUB_TOKEN}
   3. plugin action "evaluate_pr" {repo, pr, head_sha, facts JSON, ruleset, mode}
      (an OpenTalon plugin action, not a bespoke rpc —
       see talooner-plugin/protocol.md)
-       └─ plugin: assert facts into talon-db, run engine,
+       └─ plugin: assert facts into tln-db, run engine,
                   resolve conflicts (defeasible), issue llm_review as needed,
                   return actions + explanation
   4. execute actions against GitHub (see actions.md)
@@ -394,7 +404,7 @@ Three credentials, two of which Talooner never stores. See `auth.md`.
    Presented on connect; `whoami` returns tenant id, quota, enabled models. The
    run fails fast without it.
 3. **LLM provider credentials** — cluster only. Never reach the runner, never
-   appear in a workflow, never land in `talon-db`.
+   appear in a workflow, never land in `tln-db`.
 
 There is no long-lived GitHub credential anywhere in this design. Nothing to
 rotate, nothing to leak from a server that doesn't exist.
@@ -408,7 +418,10 @@ Same head sha + same base ruleset ⇒ same actions. Holds because:
 - `llm_review` results are stored as facts keyed by
   `(pr, head_sha, doc_url, prompt_version)`. A re-run at the same sha reads the
   stored fact instead of calling the model. New commit → new sha → fact absent →
-  fresh call. The fact store *is* the cache; no separate layer.
+  fresh call. The fact store *is* the cache; no separate layer. (Historical
+  design — the key gains a `path` component and moves to per-unit under
+  [`expert-review-system.md`](expert-review-system.md); neither shape is built
+  yet.)
 
 A per-PR conversation is retained cluster-side for continuity and better
 explanations, but each `llm_review` is a scoped turn whose result pins to its

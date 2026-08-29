@@ -116,8 +116,8 @@ flowchart TB
     subgraph VPS["Your VPS — you own and pay for all of this"]
         subgraph CLUSTER["OpenTalon cluster"]
             direction LR
-            PLUGIN["<b>talooner-plugin</b><br/>Talon engine · rulesets<br/>llm_review · explain"]
-            DB[("<b>talon-db</b><br/>facts · decisions<br/>subscriptions")]
+            PLUGIN["<b>talooner-plugin</b><br/>tln engine · rulesets<br/>llm_review · explain"]
+            DB[("<b>tln-db</b><br/>facts · decisions<br/>subscriptions")]
             PLUGIN <--> DB
         end
     end
@@ -156,7 +156,7 @@ Three things to read off this diagram:
 
 ## 2. Components — C4 L3
 
-### 2a. `talooner` the action — knows GitHub, knows nothing about Talon
+### 2a. `talooner` the action — knows GitHub, knows nothing about tln
 
 ```mermaid
 flowchart TB
@@ -183,12 +183,12 @@ Gone from this picture, compared to a webhook service: the HMAC verifier, the
 202-in-10-seconds path, the per-PR queue, and the App auth chain. Concurrency is
 the workflow's `concurrency:` block; auth is a token the runner is handed.
 
-### 2b. `talooner-plugin` — knows Talon, knows nothing about GitHub
+### 2b. `talooner-plugin` — knows tln, knows nothing about GitHub
 
 Lives in the other repo:
 [`talooner-plugin/diagrams.md`](https://github.com/opentalon/talooner-plugin/blob/main/diagrams.md)
 §2. Ruleset loader → engine → `llm_review` → defeasible resolution → `explain`,
-all over `talon-db`.
+all over `tln-db`.
 
 The seam: the plugin returns an **abstract action list**, the bot translates it
 into API calls. Consequences worth stating to the team —
@@ -213,7 +213,7 @@ sequenceDiagram
     participant GH as GitHub
     participant Bot as talooner (runner)
     participant Plug as talooner-plugin
-    participant DB as talon-db
+    participant DB as tln-db
 
     Dev->>GH: comment "@talooner /review"
     GH->>GH: workflow `if:` — body starts with @talooner?
@@ -261,7 +261,7 @@ sequenceDiagram
     participant GH as GitHub
     participant Bot as talooner (runner)
     participant Plug as talooner-plugin
-    participant DB as talon-db
+    participant DB as tln-db
 
     Dev->>GH: git push (new head sha)
     GH->>Bot: start job — pull_request synchronize
@@ -304,11 +304,17 @@ sequenceDiagram
 
 ## 5. Flow — `llm_review`, and why there is no cache layer
 
+**Unimplemented, and describes the superseded PR-level design.**
+[`expert-review-system.md`](expert-review-system.md) replaces this with a
+per-`code_unit` tool call (`tool "llm" "review"`) and a cache key that adds a
+`path` component. No diagram for the new flow exists yet — don't redraw this
+one as if it were current; add a new one when that architecture lands instead.
+
 ```mermaid
 sequenceDiagram
     autonumber
-    participant ENG as Talon engine
-    participant DB as talon-db
+    participant ENG as tln engine
+    participant DB as tln-db
     participant LLMR as llm_review
     participant Core as OpenTalon core
     participant API as LLM provider
@@ -403,7 +409,7 @@ stateDiagram-v2
     note right of Subscribed
         CI POSTing a fact does NOT appear here.
         Nothing is running between events, so it
-        lands in talon-db and waits for the next
+        lands in tln-db and waits for the next
         evaluation. Decision 20.
     end note
 
@@ -415,7 +421,7 @@ stateDiagram-v2
 ```
 
 Subscription is state, and there is no process to hold it — so it lives in
-`talon-db` with everything else. Each run asks the plugin rather than
+`tln-db` with everything else. Each run asks the plugin rather than
 remembering.
 
 ---
@@ -450,7 +456,7 @@ flowchart LR
 |---|---|---|
 | `GITHUB_TOKEN` | runner, one job | Comment/review on that one repo until the job ends. **Cannot merge or push** — not granted. Nothing to rotate. |
 | Cluster API key | runner, from a secret | Burn that tenant's LLM budget. Rotate cluster-side. |
-| LLM provider key | cluster only | Full provider account. Never transits a runner, `talon-db`, or a log line. |
+| LLM provider key | cluster only | Full provider account. Never transits a runner, `tln-db`, or a log line. |
 
 Job permissions: `pull-requests: write`, `checks: write`, `contents: read`.
 Everything else — `contents: write`, `actions`, `administration` — is simply not
@@ -471,13 +477,13 @@ flowchart LR
     MOD["modules.yaml"] --> USR
     MOD --> MODF["<b>module.*</b><br/>docs URL, owner"]
     TEAMS["teams.yaml"] --> TF["<b>team.*</b>"]
-    RULES["rules.tln"] -->|"define blocks over<br/>pr.changed_files"| TOUCH["<b>pr.touches_*</b><br/>Talon-native path predicates"]
+    RULES["rules.tln"] -->|"define blocks over<br/>pr.changed_files"| TOUCH["<b>pr.touches_*</b><br/>tln-native path predicates"]
     PRF --> TOUCH
     REV["pull_request_review<br/>events"] --> REVF["<b>review.*</b>"]
-    ENGINE["Talon engine"] --> LLMF["<b>llm_review.*</b><br/>pinned to head_sha"]
+    ENGINE["tln engine"] --> LLMF["<b>llm_review.*</b><br/>pinned to head_sha"]
     YOURCI["Your CI<br/>POST to the cluster<br/>/api/v1/facts"] --> CUSTOM["<b>preview.* screenshots.*<br/>dependency_scan.*</b><br/><i>read at next evaluation</i>"]
 
-    PRF --> STORE[("talon-db<br/>per-PR fact scope")]
+    PRF --> STORE[("tln-db<br/>per-PR fact scope")]
     USR --> STORE
     MODF --> STORE
     TF --> STORE
@@ -503,6 +509,6 @@ A condition on an **unset** fact evaluates to *false*, not unknown — so
 `not <unset>` is **true**, and a PR whose fact extraction failed sails through
 `not is "critical_path"` and gets auto-approved.
 
-Phase 0 verified this against `talon-language`'s evaluator and v1 accepts it. The
+Phase 0 verified this against `tln-language`'s evaluator and v1 accepts it. The
 asymmetry to hold onto: positive conditions on an unset fact fail closed (the
 rule doesn't fire), negated ones fail open. See `facts.md`, "Unset is false".

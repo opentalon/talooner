@@ -1,9 +1,14 @@
 # Talooner
 
-Deterministic GitHub review bot built on OpenTalon + tln language.
+Deterministic GitHub review bot built on OpenTalon and
+[tln-language](https://github.com/opentalon/tln-language) — the DSL, grammar,
+and inference engine this whole project sits on top of.
 
-A repo declares its review policy as tln rules. Talooner ingests PR facts,
-runs the rules through the tln inference engine, and executes the resulting
+Generic LLM code review is dull and doesn't solve the actual problem: real
+review is company-specific, and a bare "ask an LLM to review this diff"
+prompt can't encode that. Talooner's answer is to make the policy explicit: a
+repo declares its review policy as tln rules. Talooner ingests PR facts, runs
+the rules through the tln inference engine, and executes the resulting
 actions against the GitHub API. No model decides whether a PR is approved —
 rules do. An LLM is called only where a rule explicitly asks for it
 (`do llm_review ...`), and its output re-enters the engine as a fact.
@@ -65,7 +70,7 @@ in `tln-language`.
 
 and wires up the action in `.github/workflows/talooner.yml` — the full trigger
 list, why `pull_request opened` and `pull_request_target` are both deliberately
-absent, and the permission block are documented in `actions.md`, "Triggers" and
+absent, and the permission block are documented in `docs/actions.md`, "Triggers" and
 "Workflow permissions":
 
 ```yaml
@@ -110,11 +115,13 @@ claim no LLM-based reviewer can make.
 
 | File | Contents |
 |---|---|
-| `diagrams.md` | **Start here** — C4 levels 1–3 plus UML sequence/state: context, components, flows, credentials, fact sources |
-| `architecture.md` | Components, bot/plugin split, request flow, fork safety, determinism |
-| `facts.md` | Fact vocabulary, extraction, three-valued semantics |
-| `actions.md` | Action catalog, GitHub semantics, conflict resolution, App permissions |
-| `auth.md` | Credentials, onboarding CLI, untrusted input, audit |
+| [`docs/diagrams.md`](docs/diagrams.md) | **Start here** — C4 levels 1–3 plus UML sequence/state: context, components, flows, credentials, fact sources |
+| [`docs/architecture.md`](docs/architecture.md) | Components, bot/plugin split, request flow, fork safety, determinism |
+| [`docs/facts.md`](docs/facts.md) | Fact vocabulary, extraction, three-valued semantics |
+| [`docs/actions.md`](docs/actions.md) | Action catalog, GitHub semantics, conflict resolution, App permissions |
+| [`docs/auth.md`](docs/auth.md) | Credentials, onboarding CLI, untrusted input, audit |
+| [`docs/deployment-and-setup.md`](docs/deployment-and-setup.md) | Practical walkthrough: load the plugin into a cluster, wire up a repo |
+| [`docs/expert-review-system.md`](docs/expert-review-system.md) | **Not yet built.** Specification for the LLM-review feature — per-`code_unit` review, `doc_ref`/`diff_slice`, host-delegated `tool "llm" "review"` call, cache keying, build order. Supersedes the `llm_review.*` shape described in `docs/facts.md`/`docs/architecture.md`/`docs/diagrams.md` before that shape ever shipped. |
 
 Phasing and remaining work live in the
 [v1 milestone](https://github.com/opentalon/talooner/milestone/1) rather than in
@@ -164,7 +171,7 @@ whoever ran the rule.
 5. Two repo (or org) secrets: `OPENTALON_HOST`, `OPENTALON_API_KEY`
 
 No App to register, no private key to hold, no process to keep up. Items 1–3 are
-the standing cost; 4–5 are a two-minute setup per repo. Details in `auth.md`.
+the standing cost; 4–5 are a two-minute setup per repo. Details in `docs/auth.md`.
 
 ## Related repos
 
@@ -178,15 +185,9 @@ the standing cost; 4–5 are a two-minute setup per repo. Details in `auth.md`.
 ## Contributing
 
 Design phase, so the highest-value contribution right now is disagreement. The
-decisions table above records what was chosen; `facts.md` records the one
+decisions table above records what was chosen; `docs/facts.md` records the one
 accepted risk (unset facts read as false, so a failed extraction can approve)
-that is worth arguing with if you think it's wrong. The phase-0 substrate
-questions are answered in
-[`talooner-plugin/OPEN-QUESTIONS.md`](https://github.com/opentalon/talooner-plugin/blob/main/OPEN-QUESTIONS.md);
-three of them turned into upstream fixes, all landed 2026-08-07, and the phase-0
-exit artifact
-([`examples/talooner_review.tln`](https://github.com/opentalon/tln-language/blob/main/examples/talooner_review.tln))
-is in `tln-language` with a passing test suite.
+that is worth arguing with if you think it's wrong.
 
 ## License
 
