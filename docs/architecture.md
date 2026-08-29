@@ -1,5 +1,15 @@
 # Talooner — architecture
 
+> **`llm_review` described below is unimplemented.** This document's request
+> flow, determinism section, and `module.*` framing describe the PR-level
+> design as originally planned and as the code is structured today (no
+> `llm_review` executor, no `code_unit`, no per-unit cache exists in this
+> repo or `talooner-plugin`). The design actually being built is per-unit,
+> not per-PR — see [`expert-review-system.md`](expert-review-system.md) for
+> the current specification and decisions. Sections below are corrected
+> against the current code where they'd drifted independent of that change;
+> where `llm_review` specifics appear, read them as historical intent.
+
 ## What it is
 
 A GitHub Action that reviews pull requests by running the repo's own Talon
@@ -408,7 +418,10 @@ Same head sha + same base ruleset ⇒ same actions. Holds because:
 - `llm_review` results are stored as facts keyed by
   `(pr, head_sha, doc_url, prompt_version)`. A re-run at the same sha reads the
   stored fact instead of calling the model. New commit → new sha → fact absent →
-  fresh call. The fact store *is* the cache; no separate layer.
+  fresh call. The fact store *is* the cache; no separate layer. (Historical
+  design — the key gains a `path` component and moves to per-unit under
+  [`expert-review-system.md`](expert-review-system.md); neither shape is built
+  yet.)
 
 A per-PR conversation is retained cluster-side for continuity and better
 explanations, but each `llm_review` is a scoped turn whose result pins to its

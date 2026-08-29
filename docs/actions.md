@@ -191,8 +191,8 @@ Mapping of the brief's ruleset to phases:
 | Block incomplete PRs | v1 |
 | Require human review for critical paths / large PRs | v1 |
 | Security review for new dependencies (the `require` half) | v1 |
-| LLM documentation review | v1.5 |
-| Block/approve on `llm_review.result` | v1.5 |
+| LLM documentation review | v1.5 — build order now specified in [`expert-review-system.md`](expert-review-system.md) (Phases 1–5), per-`code_unit` not per-PR |
+| Block/approve on `llm_review.result` | v1.5 — same |
 | Reacting to preview / screenshot / scan facts pushed by tenant CI | v2 |
 | `do deploy_preview` / `do screenshot` / `do scan_dependencies` as verbs | never |
 

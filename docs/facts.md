@@ -423,6 +423,14 @@ is touched, so a rule gated on them simply does not fire — the safe direction.
 
 ### Primary module: most changed lines, path order on a tie
 
+**This single-eval-per-PR cardinality is what
+[`expert-review-system.md`](expert-review-system.md) deliberately changes for
+LLM review** (its own "Key decisions" #2) — once that lands, a touched PR gets
+one `code_unit` record per touched module/service, not one binding to a
+`primary` module. Nothing here changes until then; `module.*` as described
+below is what's live today and unaffected by the new spec outside of the
+`llm_review` path.
+
 A PR touching five modules is evaluated **once**, not five times. `module.*`
 binds to the **primary** touched module: the one whose files carry the most
 changed lines (additions + deletions summed across its prefix). On a tie the
@@ -525,6 +533,21 @@ readable with no extra scope, so it is a direct match against the resolved
 team's slug.
 
 ## `llm_review.*`
+
+**Not implemented in code yet — spec only, unshipped.** Nothing in this repo
+or `talooner-plugin` executes an `llm_review` today: `internal/cluster` only
+references the feature name (`whoami` capability check, `/review --force`
+rejected with `ErrForceUnsupported` until it lands), and `validate_ruleset`
+has no `llm_review` verb to accept. The table below is this repo's oldest,
+PR-level design for the fact shape — single `doc_url`, one evaluation per PR.
+
+**Superseded by [`expert-review-system.md`](expert-review-system.md)
+before it ever shipped.** The design that's actually going to land is
+per-`code_unit`, not per-PR: `doc_ref` (a repo path) replaces `doc_url`, each
+touched unit gets its own `diff_slice`, and the cache key gains a `path`
+component — `(pr, head_sha, path, doc_ref, prompt_version)`. See that doc's
+"Key decisions" #2 and #4. Treat the table below as historical intent, not a
+target to build toward.
 
 | Fact | Type |
 |---|---|

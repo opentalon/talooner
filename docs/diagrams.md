@@ -304,6 +304,12 @@ sequenceDiagram
 
 ## 5. Flow — `llm_review`, and why there is no cache layer
 
+**Unimplemented, and describes the superseded PR-level design.**
+[`expert-review-system.md`](expert-review-system.md) replaces this with a
+per-`code_unit` tool call (`tool "llm" "review"`) and a cache key that adds a
+`path` component. No diagram for the new flow exists yet — don't redraw this
+one as if it were current; add a new one when that architecture lands instead.
+
 ```mermaid
 sequenceDiagram
     autonumber
