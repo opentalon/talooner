@@ -1,6 +1,6 @@
 # Talooner — facts
 
-Everything a rule can match on. Facts live in `talon-db`, scoped per pull
+Everything a rule can match on. Facts live in `tln-db`, scoped per pull
 request, asserted by the bot and read by the engine.
 
 This file is the **extraction** side: what the bot produces and where each fact
@@ -323,7 +323,7 @@ rule "Escalate when the author owns the code they changed" {
 `attr "user.owner"` in an action argument is resolved by the **engine** against
 the matched row, not passed through as the string `"user.owner"` for the bot to
 look up. Same for `{attr.user.owner}` in the comment body. See
-[`talon-language/docs/actions.md`](https://github.com/opentalon/talon-language/blob/main/docs/actions.md).
+[`tln-language/docs/actions.md`](https://github.com/opentalon/tln-language/blob/main/docs/actions.md).
 
 That second rule is the case that motivates the namespace: self-review of
 critical code is invisible to CODEOWNERS (GitHub won't request a review from the
@@ -362,9 +362,9 @@ quantification over the list.
 
 **They do, since 2026-08-07.** Phase 0 found they didn't — both evaluator paths
 type-asserted their operands to `string` and returned false for a list, with no
-diagnostic. Fixed generally in `talon-language` rather than worked around here:
-[`talon-language#158`](https://github.com/opentalon/talon-language/issues/158),
-landed in `talon-language` 35109f0 and `talon-db` e1c8ddb, so both backends
+diagnostic. Fixed generally in `tln-language` rather than worked around here:
+[`tln-language#158`](https://github.com/opentalon/tln-language/issues/158),
+landed in `tln-language` 35109f0 and `tln-db` e1c8ddb, so both backends
 quantify. The `pr.changed_paths_joined` fallback is dropped.
 
 **There is no glob matching, and that is what these examples used to assume.**
@@ -374,7 +374,7 @@ text. Write path predicates with `contains`, `starts_with`, and `ends_with`. The
 cost is precision: `contains "payment"` also matches `docs/payment-notes.md`, and
 `ends_with ".css"` can't exclude `vendor/`. Narrow with a prefix
 (`starts_with "app/"`) when that matters. Real glob support is a possible
-`talon-language` ask, not a blocker.
+`tln-language` ask, not a blocker.
 
 One edge that follows from the quantification: a list with **no string elements
 matches nothing** — there is no fallback to the scalar path. An empty
@@ -587,7 +587,7 @@ overwrite a built-in fact. Without that, a workflow could POST
 The single most dangerous detail here. Phase 0 settled it, and not the way this
 document originally assumed.
 
-`talon-language`'s evaluator is **two-valued**, with closed-world
+`tln-language`'s evaluator is **two-valued**, with closed-world
 negation-as-failure. There is no `unknown`. A missing attribute makes its pattern
 fail, which makes any enclosing `not` *succeed*. Verified against both backends —
 see `talooner-plugin/OPEN-QUESTIONS.md` A1 for the probe and the code
@@ -632,7 +632,7 @@ they're enforced are in
 exits.
 
 One consequence worth stating with the retention rules: a fact asserted from
-outside (your CI POSTing `preview.status`) sits in `talon-db` doing nothing until
+outside (your CI POSTing `preview.status`) sits in `tln-db` doing nothing until
 something evaluates. In v1 that something is a human typing `@talooner /review`
 (decision 20). If retention expires the fact before anyone does, the rule that
 wanted it never fires — so retention must outlive a realistic "nobody looked at

@@ -9,7 +9,7 @@ whether any of it gates a merge.
 ## v1 — native actions
 
 A rule declares these with `do <verb> <args>`
-([`talon-language/docs/actions.md`](https://github.com/opentalon/talon-language/blob/main/docs/actions.md)).
+([`tln-language/docs/actions.md`](https://github.com/opentalon/tln-language/blob/main/docs/actions.md)).
 The engine resolves each argument against the PR's facts and returns the action
 as data; the bot performs it.
 
@@ -150,7 +150,7 @@ and reports the result; the engine reacts:
 tenant's CI builds a preview (their workflow, their infra, their choice of tool)
   └─ POST https://<your-cluster>/api/v1/facts
        {"preview.status": "deployed", "preview.url": "..."}
-     └─ fact lands in talon-db, scoped to the PR
+     └─ fact lands in tln-db, scoped to the PR
         └─ next evaluation: `when attr "preview.status" == "deployed"` fires
            └─ Talooner comments, requires design review, whatever the rules say
 ```

@@ -7,7 +7,7 @@ hosted tier, no free tier, no managed offering. To use it you need:
 
 1. A VPS (or any host) running an **OpenTalon cluster**, reachable from the
    runner
-2. `talooner-plugin` loaded in that cluster, with `talon-db` available
+2. `talooner-plugin` loaded in that cluster, with `tln-db` available
 3. LLM provider credentials configured **in the cluster**
 4. `.github/workflows/talooner.yml` in each repo you want reviewed
 5. `OPENTALON_HOST` and `OPENTALON_API_KEY` as repo or org secrets
@@ -24,7 +24,7 @@ don't run Talooner.
 |---|---|---|---|
 | `GITHUB_TOKEN` | the runner, for one job | Whatever the workflow's `permissions:` block declares, on one repo | Expires when the job ends. Nothing to rotate — the next run gets a different token. |
 | Cluster API key | repo/org secret → runner env | `evaluate_pr`, `whoami`, quota against one tenant | Attacker can burn that tenant's LLM budget. Rotate cluster-side; scoped to one tenant. |
-| LLM provider key | cluster only | Full provider account | Rotate at the provider. **Never** transits a runner, `talon-db`, or a log line. |
+| LLM provider key | cluster only | Full provider account | Rotate at the provider. **Never** transits a runner, `tln-db`, or a log line. |
 
 The isolation that matters: **the runner never holds an LLM provider
 credential**, and the cluster never holds a GitHub credential. Compromising
@@ -191,8 +191,8 @@ even though nothing needs it until phase 2.
 
 ### `rules test`
 
-`talon-language` already ships a `.tln.test` framework and a testrunner
-(`talon-language/internal/testrunner`). Talooner reuses it directly: a repo
+`tln-language` already ships a `.tln.test` framework and a testrunner
+(`tln-language/internal/testrunner`). Talooner reuses it directly: a repo
 unit-tests its review policy in its own CI, with synthetic PR facts, before that
 policy ever gates a real PR.
 
