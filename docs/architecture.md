@@ -12,7 +12,7 @@
 
 ## What it is
 
-A GitHub Action that reviews pull requests by running the repo's own Talon
+A GitHub Action that reviews pull requests by running the repo's own tln
 ruleset. No model decides anything. Rules decide; an LLM is consulted only where
 a rule says `do llm_review ...`, and its answer re-enters the engine as a fact.
 
@@ -41,13 +41,13 @@ no shared anything.
 │            │                 │            │ ┌────────────────┐ │
 │            │ native event    │   gRPC     │ │ talooner-plugin│ │
 │            ▼                 │───────────▶│ │ • ruleset store│ │
-│  ┌────────────────────────┐  │◀───────────│ │ • Talon engine │ │
+│  ┌────────────────────────┐  │◀───────────│ │ • tln engine   │ │
 │  │ Actions runner         │  │            │ │ • llm_review   │ │
 │  │  opentalon/talooner@v1 │  │            │ │ • explain/audit│ │
 │  │  • fact extraction     │  │            │ └───────┬────────┘ │
 │  │  • action exec         │  │            │         │          │
 │  │  • EPHEMERAL           │  │            │   ┌─────▼──────┐   │
-│  └────────────────────────┘  │            │   │  tln-db  │   │
+│  └────────────────────────┘  │            │   │  tln-db    │   │
 │            │ GITHUB_TOKEN    │            │   │ PR facts   │   │
 │            ▼                 │            │   │ decisions  │   │
 │  reviews · comments · checks │            │   └────────────┘   │
@@ -74,13 +74,13 @@ cluster-side.
 | Fact extraction from the GitHub API | action | Only the runner holds a token |
 | Fact storage, reactive `changes` operator | plugin → tln-db | Facts must outlive a run that lasts 30 seconds |
 | Ruleset parse, validate, compile | plugin | Rules are evaluated where facts live |
-| Talon engine, defeasible resolution | plugin | Same |
+| tln engine, defeasible resolution | plugin | Same |
 | `llm_review` | plugin | Only the cluster holds tenant LLM credentials |
 | `explain` / audit trail | plugin → tln-db | Decisions are queried long after the PR closes |
 | Action execution against GitHub | action | Only the runner holds a token |
 
-The seam is: **the action knows GitHub and knows nothing about Talon; the plugin
-knows Talon and knows nothing about GitHub.** The plugin returns an abstract
+The seam is: **the action knows GitHub and knows nothing about tln; the plugin
+knows tln and knows nothing about GitHub.** The plugin returns an abstract
 action list; the action translates it into API calls. That keeps
 `talooner-plugin` testable without a GitHub fixture, and keeps the GitHub half
 free of engine state.
@@ -149,7 +149,7 @@ talooner/
     event/                # parse GITHUB_EVENT_PATH into {repo, pr, trigger}
     command/              # @talooner /review /stop /why /plan + write-access gate
     facts/                # extractors: diff, checks, CODEOWNERS, modules, teams
-    action/               # executor interface + one file per Talon verb
+    action/               # executor interface + one file per tln verb
       executor.go         #   interface + registry keyed by verb
       github.go           #   real writes
       printer.go          #   dry run — this is `rules plan`
@@ -168,13 +168,13 @@ Three things this layout is deliberately encoding:
 
 **`command/` and `action/` are not the same concept.** A *command* is a human
 typing `@talooner /review` in a PR comment — it arrives in the event payload, is
-gated on write access, and decides *whether to evaluate*. An *action* is a Talon verb
+gated on write access, and decides *whether to evaluate*. An *action* is a tln verb
 the plugin returned — it arrives as data from the engine and decides *what to do
 to GitHub*. Different inputs, different auth, different tests. Collapsing them
 into one package makes the write-access gate ambiguous, which is a security
 control, not a stylistic detail.
 
-**Action file names match Talon verbs exactly.** The plugin returns
+**Action file names match tln verbs exactly.** The plugin returns
 `{"verb": "approve", ...}` as a string; the bot dispatches through a registry
 keyed by that string. If the file is `approve.go` and the verb is `approve`,
 adding a verb to the DSL and adding a file stay in lockstep, and an unknown verb
@@ -277,7 +277,7 @@ answered.
 
 ### No reactive wake in v1
 
-Talon's reactive rules still work — they fire when facts change *during* an
+tln's reactive rules still work — they fire when facts change *during* an
 evaluation. What v1 does not have is anything to notice a fact changing while no
 run is in progress.
 

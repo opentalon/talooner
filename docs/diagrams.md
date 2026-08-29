@@ -116,7 +116,7 @@ flowchart TB
     subgraph VPS["Your VPS — you own and pay for all of this"]
         subgraph CLUSTER["OpenTalon cluster"]
             direction LR
-            PLUGIN["<b>talooner-plugin</b><br/>Talon engine · rulesets<br/>llm_review · explain"]
+            PLUGIN["<b>talooner-plugin</b><br/>tln engine · rulesets<br/>llm_review · explain"]
             DB[("<b>tln-db</b><br/>facts · decisions<br/>subscriptions")]
             PLUGIN <--> DB
         end
@@ -156,7 +156,7 @@ Three things to read off this diagram:
 
 ## 2. Components — C4 L3
 
-### 2a. `talooner` the action — knows GitHub, knows nothing about Talon
+### 2a. `talooner` the action — knows GitHub, knows nothing about tln
 
 ```mermaid
 flowchart TB
@@ -183,7 +183,7 @@ Gone from this picture, compared to a webhook service: the HMAC verifier, the
 202-in-10-seconds path, the per-PR queue, and the App auth chain. Concurrency is
 the workflow's `concurrency:` block; auth is a token the runner is handed.
 
-### 2b. `talooner-plugin` — knows Talon, knows nothing about GitHub
+### 2b. `talooner-plugin` — knows tln, knows nothing about GitHub
 
 Lives in the other repo:
 [`talooner-plugin/diagrams.md`](https://github.com/opentalon/talooner-plugin/blob/main/diagrams.md)
@@ -313,7 +313,7 @@ one as if it were current; add a new one when that architecture lands instead.
 ```mermaid
 sequenceDiagram
     autonumber
-    participant ENG as Talon engine
+    participant ENG as tln engine
     participant DB as tln-db
     participant LLMR as llm_review
     participant Core as OpenTalon core
@@ -477,10 +477,10 @@ flowchart LR
     MOD["modules.yaml"] --> USR
     MOD --> MODF["<b>module.*</b><br/>docs URL, owner"]
     TEAMS["teams.yaml"] --> TF["<b>team.*</b>"]
-    RULES["rules.tln"] -->|"define blocks over<br/>pr.changed_files"| TOUCH["<b>pr.touches_*</b><br/>Talon-native path predicates"]
+    RULES["rules.tln"] -->|"define blocks over<br/>pr.changed_files"| TOUCH["<b>pr.touches_*</b><br/>tln-native path predicates"]
     PRF --> TOUCH
     REV["pull_request_review<br/>events"] --> REVF["<b>review.*</b>"]
-    ENGINE["Talon engine"] --> LLMF["<b>llm_review.*</b><br/>pinned to head_sha"]
+    ENGINE["tln engine"] --> LLMF["<b>llm_review.*</b><br/>pinned to head_sha"]
     YOURCI["Your CI<br/>POST to the cluster<br/>/api/v1/facts"] --> CUSTOM["<b>preview.* screenshots.*<br/>dependency_scan.*</b><br/><i>read at next evaluation</i>"]
 
     PRF --> STORE[("tln-db<br/>per-PR fact scope")]

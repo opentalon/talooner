@@ -13,7 +13,7 @@ A rule declares these with `do <verb> <args>`
 The engine resolves each argument against the PR's facts and returns the action
 as data; the bot performs it.
 
-| Talon | GitHub effect |
+| tln | GitHub effect |
 |---|---|
 | `do approve "pr"` | Review with event `APPROVE`, plus check run `talooner` → `success` |
 | `do block "pr.merge"` | Check run `talooner` → `failure`, plus review `REQUEST_CHANGES` |
@@ -28,7 +28,7 @@ strings carrying interpolation (`"owned by {attr.user.owner}"`). Both are
 resolved cluster-side before the action reaches the bot, so the executor never
 looks a fact up.
 
-**Talon does not validate verb names** — the vocabulary belongs to the host. A
+**tln does not validate verb names** — the vocabulary belongs to the host. A
 misspelled `do aprove "pr"` parses cleanly and would otherwise vanish, so
 `validate_ruleset` rejects anything outside this table
 (`talooner-plugin/engine.md`, "The verb list is ours to enforce"). The bot
@@ -85,7 +85,7 @@ condition no longer holds are edited to a resolved state, not deleted — the
 history is the audit trail.
 
 Template interpolation (`"screenshots at {screenshots.gallery_url}"`) uses
-Talon's existing `{ident.field}` label interpolation (`grammar.ebnf:601`).
+tln's existing `{ident.field}` label interpolation (`grammar.ebnf:601`).
 Confirm it's available in action-argument position, not only in labels.
 
 ### Reversibility
@@ -123,7 +123,7 @@ re-evaluates from scratch on every event rather than applying deltas.
 
 ## Conflict resolution happens plugin-side
 
-`approve` and `block` can both fire. They are resolved by Talon's defeasible
+`approve` and `block` can both fire. They are resolved by tln's defeasible
 machinery inside the plugin, not by an ad-hoc "block wins" in the bot —
 `strict` > `overrides` > priority, plus a `strict` base ruleset Talooner always
 loads. Full rules in
@@ -175,7 +175,7 @@ Consequences:
 - The brief's ruleset **parses and runs as written**. Rules gated on
   `preview.status` or `screenshots.status` simply never fire until something
   asserts those facts. No error, no special-casing, no stub actions.
-- `do deploy_preview "pr"` is not a verb Talooner serves. It *parses* — Talon
+- `do deploy_preview "pr"` is not a verb Talooner serves. It *parses* — tln
   accepts any verb — so this is enforced by `validate_ruleset` rejecting it by
   name, with a pointer to the facts API. Better than accepting it and doing
   nothing, which is exactly what would happen if nobody checked.

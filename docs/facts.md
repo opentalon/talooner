@@ -331,10 +331,10 @@ author) but trivially expressible once ownership is a fact.
 
 Requires `members: read` to expand a team handle into members.
 
-## Project-specific facts — Talon-native
+## Project-specific facts — tln-native
 
 `pr.touches_auth`, `pr.touches_payments`, `pr.touches_css` are path predicates.
-They are **defined in Talon**, not in YAML, so policy stays in one file and gets
+They are **defined in tln**, not in YAML, so policy stays in one file and gets
 the same validation, testing, and `explain` treatment as everything else:
 
 ```talon
