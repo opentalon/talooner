@@ -243,24 +243,21 @@ and the whole reason to have both.
 
 | Fact | Type | Source |
 |---|---|---|
-| `user.owner` | string | Primary owner of the touched code — CODEOWNERS |
+| `user.owner` | string | Primary owner of the touched code — CODEOWNERS, else `modules.yaml` |
 | `user.owners` | list\<string\> | All owners across touched paths |
 | `user.author` | string | Alias of `pr.author`, for symmetry |
 | `user.reviewer` | string | Currently requested reviewer, if one |
 | `user.last_toucher` | string | Author of the most recent prior commit to the touched paths |
-
-`user.*` ownership comes from CODEOWNERS only. A module's owner lives in
-`modules.yaml` and is exposed separately as `module.owner` (below) — it does not
-back-fill `user.owner`, so a `requires "review.senior_engineer"` keyed off
-`user.owner` still only sees CODEOWNERS ownership.
 
 Resolution order for `user.owner`, first hit wins:
 
 1. `.github/CODEOWNERS` — GitHub's own mechanism, already in most repos, already
    the thing people maintain. Reusing it beats inventing a parallel ownership
    file that drifts.
-2. `user.last_toucher` from `git log` on the touched paths.
-3. Unset. Not `pr.author` — falling back to the author would let a rule
+2. `owner:` in `modules.yaml`, for repos without CODEOWNERS or where Talooner
+   ownership should differ from GitHub's auto-request behaviour.
+3. `user.last_toucher` from `git log` on the touched paths.
+4. Unset. Not `pr.author` — falling back to the author would let a rule
    "escalate to the owner" silently escalate to the person who wrote the change,
    which is exactly the wrong answer and is invisible when it happens.
 
@@ -269,25 +266,34 @@ Resolution order for `user.owner`, first hit wins:
 `user.author` is always asserted (an alias of `pr.author`, for symmetry).
 `user.reviewer` is asserted when the PR has a standing review request: the first
 requested user login, else the first requested team slug; left unset when nothing
-is requested. `user.owner` and `user.owners` are resolved from CODEOWNERS
-(tier 1) against the changed paths — the last matching rule wins per GitHub, and
-`user.owners` is the sorted, de-duplicated union across every touched path;
-`user.owner` is the first owner of the first touched path CODEOWNERS assigns.
+is requested.
 
-CODEOWNERS is read from the **base** branch at its own ref, like the ruleset and
-config (architecture.md, "Fork safety") — a fork PR cannot name its own owners.
-The three locations GitHub consults (`.github/CODEOWNERS`, `CODEOWNERS`,
-`docs/CODEOWNERS`) are tried in priority order; a repo with none leaves
-`user.owner` / `user.owners` unset.
+`user.owner` and `user.owners` are a waterfall over tiers 1–2, not a per-path
+merge: tier 1 (CODEOWNERS) is tried against every changed path first, and only
+when it names nobody for *any* of them does tier 2 (`modules.yaml`) run at all.
+Tier 1: the last matching CODEOWNERS rule wins per GitHub, `user.owners` is the
+sorted, de-duplicated union across every touched path, `user.owner` is the first
+owner of the first touched path CODEOWNERS assigns. CODEOWNERS is read from the
+**base** branch at its own ref, like the ruleset and config (architecture.md,
+"Fork safety") — a fork PR cannot name its own owners. The three locations
+GitHub consults (`.github/CODEOWNERS`, `CODEOWNERS`, `docs/CODEOWNERS`) are
+tried in priority order.
 
-Tier 3 (`git log` last-toucher) is **not** implemented in v1; tier 2's
-`modules.yaml` loader ships with C6, but it feeds `module.*` — not `user.owner`
-(see below). A path CODEOWNERS does not cover therefore leaves `user.owner` /
-`user.owners` **unset** rather than guessed at `pr.author`:
-the extractor does not pretend to know the owner. `user.last_toucher` is likewise
-not asserted yet. These gaps are safe under "Unset is false" — a rule gated on
-`attr "user.owner" == ...` simply does not fire for a path CODEOWNERS ignores,
-which is the same quiet non-match as a repo with no CODEOWNERS at all.
+Tier 2 reads the same `modules.yaml` load `module.*` uses (below), matching each
+touched path against configured module prefixes and taking the declared
+`owner:`; a nested module resolves to the most specific (longest) matching
+prefix, the same "most specific wins" rule CODEOWNERS itself uses. A module with
+no `owner:` declared contributes nothing. `user.owner` is the first declared
+owner of the first touched path a module covers; `user.owners` is the sorted,
+de-duplicated union across every touched path, same shape as tier 1.
+
+Tier 3 (`git log` last-toucher) is **not** implemented in v1. A path neither
+CODEOWNERS nor `modules.yaml` covers therefore leaves `user.owner` /
+`user.owners` **unset** rather than guessed at `pr.author`: the extractor does
+not pretend to know the owner. `user.last_toucher` is likewise not asserted yet.
+These gaps are safe under "Unset is false" — a rule gated on
+`attr "user.owner" == ...` simply does not fire for a path neither tier covers,
+the same quiet non-match as a repo with neither file.
 
 ```yaml
 # .github/talooner/modules.yaml

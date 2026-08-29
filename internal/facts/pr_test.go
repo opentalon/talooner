@@ -641,9 +641,9 @@ func TestPRUserOwnerFromCodeowners(t *testing.T) {
 	}
 }
 
-// A path CODEOWNERS does not name leaves user.owner / user.owners unset rather
-// than guessed at pr.author — the modules.yaml and git-history tiers are later
-// tickets (facts.md, "user.owner").
+// A path neither CODEOWNERS nor modules.yaml names leaves user.owner /
+// user.owners unset rather than guessed at pr.author — the git-history tier is
+// a later ticket (facts.md, "user.owner").
 func TestPRUserOwnerUnsetWhenCodeownersSilent(t *testing.T) {
 	const co = "/internal/secret/* @alice\n"
 	src := fakeSource{pr: samplePR(), files: []string{"README.md"}}
@@ -656,6 +656,61 @@ func TestPRUserOwnerUnsetWhenCodeownersSilent(t *testing.T) {
 	}
 	if _, ok := got["user.owners"]; ok {
 		t.Errorf("user.owners = %v, want unset", got["user.owners"])
+	}
+}
+
+// modules.yaml's owner: is the second tier of user.owner resolution, consulted
+// only when CODEOWNERS names nobody for any touched path (facts.md,
+// "user.owner").
+func TestPRUserOwnerFromModulesWhenCodeownersSilent(t *testing.T) {
+	const co = "/internal/secret/* @alice\n"
+	modules := []config.Module{
+		{Path: "billing/", Owner: "@org/payments"},
+		{Path: "docs/", Owner: ""},
+	}
+	src := fakeSource{pr: samplePR(), files: []string{"billing/invoice.go", "docs/README.md"}}
+	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, []byte(co), modules, nil)
+	if err != nil {
+		t.Fatalf("PR: %v", err)
+	}
+	if got["user.owner"] != "@org/payments" {
+		t.Errorf("user.owner = %v, want @org/payments", got["user.owner"])
+	}
+	owners, ok := got["user.owners"].([]string)
+	if !ok || len(owners) != 1 || owners[0] != "@org/payments" {
+		t.Errorf("user.owners = %v, want [@org/payments]", got["user.owners"])
+	}
+}
+
+// CODEOWNERS naming an owner for even one touched path wins outright — the
+// tiers are a waterfall, not a per-path merge, so modules.yaml is never
+// consulted once CODEOWNERS has answered.
+func TestPRUserOwnerCodeownersWinsOverModules(t *testing.T) {
+	const co = "billing/* @alice\n"
+	modules := []config.Module{
+		{Path: "billing/", Owner: "@org/payments"},
+	}
+	src := fakeSource{pr: samplePR(), files: []string{"billing/invoice.go"}}
+	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, []byte(co), modules, nil)
+	if err != nil {
+		t.Fatalf("PR: %v", err)
+	}
+	if got["user.owner"] != "@alice" {
+		t.Errorf("user.owner = %v, want @alice (CODEOWNERS, not modules.yaml)", got["user.owner"])
+	}
+}
+
+// A repo with no CODEOWNERS at all still falls to modules.yaml, not just a
+// CODEOWNERS silent on the specific path.
+func TestPRUserOwnerFromModulesWithNoCodeowners(t *testing.T) {
+	modules := []config.Module{{Path: "billing/", Owner: "@org/payments"}}
+	src := fakeSource{pr: samplePR(), files: []string{"billing/invoice.go"}}
+	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, modules, nil)
+	if err != nil {
+		t.Fatalf("PR: %v", err)
+	}
+	if got["user.owner"] != "@org/payments" {
+		t.Errorf("user.owner = %v, want @org/payments", got["user.owner"])
 	}
 }
 
@@ -809,4 +864,50 @@ func TestModuleOwns(t *testing.T) {
 			t.Errorf("moduleOwns(%q, %q) = %v, want %v", c.prefix, c.path, got, c.want)
 		}
 	}
+}
+
+func TestResolveModuleOwners(t *testing.T) {
+	t.Run("nested module wins on the more specific path", func(t *testing.T) {
+		modules := []config.Module{
+			{Path: "internal/", Owner: "@org/core"},
+			{Path: "internal/auth/", Owner: "@alice"},
+		}
+		primary, owners := resolveModuleOwners(modules, []string{"internal/auth/token.go"})
+		if primary != "@alice" {
+			t.Errorf("primary = %v, want @alice (more specific module)", primary)
+		}
+		if !reflect.DeepEqual(owners, []string{"@alice"}) {
+			t.Errorf("owners = %v, want [@alice]", owners)
+		}
+	})
+
+	t.Run("a module with no owner declared is skipped", func(t *testing.T) {
+		modules := []config.Module{{Path: "docs/", Owner: ""}}
+		primary, owners := resolveModuleOwners(modules, []string{"docs/README.md"})
+		if primary != "" || owners != nil {
+			t.Errorf("primary/owners = %q/%v, want unset", primary, owners)
+		}
+	})
+
+	t.Run("union across touched paths is sorted and de-duplicated", func(t *testing.T) {
+		modules := []config.Module{
+			{Path: "billing/", Owner: "@org/payments"},
+			{Path: "internal/auth/", Owner: "@alice"},
+		}
+		primary, owners := resolveModuleOwners(modules, []string{"internal/auth/token.go", "billing/invoice.go", "billing/other.go"})
+		if primary != "@alice" {
+			t.Errorf("primary = %v, want @alice (first touched path)", primary)
+		}
+		if !reflect.DeepEqual(owners, []string{"@alice", "@org/payments"}) {
+			t.Errorf("owners = %v, want [@alice @org/payments]", owners)
+		}
+	})
+
+	t.Run("no configured module covers any touched path", func(t *testing.T) {
+		modules := []config.Module{{Path: "billing/", Owner: "@org/payments"}}
+		primary, owners := resolveModuleOwners(modules, []string{"README.md"})
+		if primary != "" || owners != nil {
+			t.Errorf("primary/owners = %q/%v, want unset", primary, owners)
+		}
+	})
 }

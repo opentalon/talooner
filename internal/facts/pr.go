@@ -49,9 +49,10 @@ type Source interface {
 // codeowners is the repo's CODEOWNERS file, read from the base branch at its own
 // ref (facts.md, "user.owner"); it is nil when the repo has none. user.owner and
 // user.owners are derived from it against the changed paths — the first tier of
-// the owner resolution order. The modules.yaml and git-history tiers are later
-// tickets, so a path CODEOWNERS does not cover is left unowned rather than
-// guessed (see resolveOwners).
+// the owner resolution order. modules.yaml's owner: is the second tier, consulted
+// only when CODEOWNERS names nobody for any touched path (see resolveOwners,
+// resolveModuleOwners). The git-history tier is a later ticket, so a path neither
+// covers is left unowned rather than guessed.
 //
 // modules is the repo's .github/talooner/modules.yaml (facts.md, "module.*"),
 // read from the base branch like the ruleset so a fork PR cannot redefine what it
@@ -177,9 +178,10 @@ func PR(ctx context.Context, src Source, owner, repo string, number int, checks 
 
 	// user.* facts (facts.md, "user.*"): user.author is pr.author for symmetry,
 	// user.reviewer the standing review request, user.owner / user.owners the
-	// CODEOWNERS-derived ownership. All read data already fetched here; the
-	// CODEOWNERS content is passed in rather than re-read.
-	userFacts(s, pr, changed, codeowners)
+	// CODEOWNERS/modules.yaml-derived ownership. All read data already fetched
+	// here; the CODEOWNERS content and parsed modules are passed in rather than
+	// re-read.
+	userFacts(s, pr, changed, codeowners, modules)
 	// module.* facts (facts.md, "module.*"): bound to the primary touched module
 	// by most changed lines, with module.touched_count always asserted. The file
 	// stats are already in hand from the ChangedFileStats fetch above.
@@ -192,7 +194,7 @@ func PR(ctx context.Context, src Source, owner, repo string, number int, checks 
 }
 
 // userFacts asserts the user.* namespace (facts.md, "user.*") into s.
-func userFacts(s Set, pr *github.PullRequest, changed []string, codeowners []byte) {
+func userFacts(s Set, pr *github.PullRequest, changed []string, codeowners []byte, modules []config.Module) {
 	// user.author aliases pr.author for symmetry. Always asserted: a rule quoting
 	// user.author on a PR with no author is not a real case, but an omitted fact
 	// there would read as a dead extractor (facts.md, "Unset is false").
@@ -208,16 +210,22 @@ func userFacts(s Set, pr *github.PullRequest, changed []string, codeowners []byt
 		s.String("user.reviewer", t[0])
 	}
 
-	// user.owner / user.owners come from CODEOWNERS, the first tier of the owner
-	// resolution order (facts.md). A repo without CODEOWNERS, or one whose
-	// CODEOWNERS names no owner for any touched path, leaves both facts unset
-	// rather than guessed at pr.author — the modules.yaml and git-history tiers
-	// are later tickets.
+	// user.owner / user.owners: CODEOWNERS is the first tier of the resolution
+	// order (facts.md, "user.owner"). When it names no owner for any touched
+	// path — no CODEOWNERS at all, or one silent on every touched path —
+	// modules.yaml's owner: is consulted next, the second tier. A path neither
+	// covers, or a repo with neither file, leaves both facts unset rather than
+	// guessed at pr.author — the git-history tier is a later ticket.
+	primary, owners := "", []string(nil)
 	if len(codeowners) > 0 {
-		if primary, owners := resolveOwners(parseCodeowners(codeowners), changed); owners != nil {
-			s.String("user.owner", primary)
-			s.Strings("user.owners", owners)
-		}
+		primary, owners = resolveOwners(parseCodeowners(codeowners), changed)
+	}
+	if owners == nil {
+		primary, owners = resolveModuleOwners(modules, changed)
+	}
+	if owners != nil {
+		s.String("user.owner", primary)
+		s.Strings("user.owners", owners)
 	}
 }
 

@@ -82,6 +82,47 @@ func moduleFacts(s Set, files []github.FileStat, modules []config.Module) {
 	}
 }
 
+// resolveModuleOwners finds who owns the changed paths via modules.yaml, the
+// second tier of the user.owner resolution order (facts.md, "user.owner"),
+// consulted only when CODEOWNERS names nobody for any touched path. The primary
+// owner is the first declared owner of the first touched path a module covers;
+// owners is the sorted, de-duplicated union across every touched path. A path
+// under no configured module, or under one with no owner declared, contributes
+// nothing. Nested modules resolve to the most specific (longest) matching path —
+// the same "most specific wins" rule CODEOWNERS itself uses.
+func resolveModuleOwners(modules []config.Module, paths []string) (primary string, owners []string) {
+	seen := make(map[string]bool)
+	first := true
+	for _, path := range paths {
+		var best *config.Module
+		for i := range modules {
+			m := &modules[i]
+			if m.Owner == "" || !moduleOwns(m.Path, path) {
+				continue
+			}
+			if best == nil || len(m.Path) > len(best.Path) {
+				best = m
+			}
+		}
+		if best == nil {
+			continue
+		}
+		if !seen[best.Owner] {
+			seen[best.Owner] = true
+			owners = append(owners, best.Owner)
+			if first {
+				primary = best.Owner
+				first = false
+			}
+		}
+	}
+	if len(owners) == 0 {
+		return "", nil
+	}
+	sort.Strings(owners)
+	return primary, owners
+}
+
 // moduleOwns reports whether path is under a module's configured prefix. Modules
 // are directory prefixes, so "internal/auth/" matches "internal/auth/x.go" and
 // "internal/auth" matches a file of that exact name; it does not match
