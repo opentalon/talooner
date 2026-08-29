@@ -35,8 +35,10 @@ violates encoded knowledge, and stays silent when the PR is legitimate.
    - Everything talooner reads comes from the base branch, so a fork PR can't redefine
      the rules or docs it's judged against.
    - Model output is constrained to a fixed enum; it can never self-approve a merge.
-5. **Business goal.** Package a company's domain expertise (tln rules + docs) as an
-   expert reviewer, and sell it as a subscription to other companies.
+5. **Perspective.** A company's domain expertise — the tln rules and docs it already
+   maintains — becomes an expert reviewer for its own code. Talooner turns that
+   knowledge into a working reviewer instead of leaving it to erode as tribal
+   knowledge or go stale in a wiki nobody reads before a review.
 
 ## Architecture
 
