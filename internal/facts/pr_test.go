@@ -14,18 +14,20 @@ import (
 // fakeSource stands in for *github.Client. The extractor is a pure function of
 // the API responses, so there is nothing here worth an httptest server.
 type fakeSource struct {
-	pr        *github.PullRequest
-	prErr     error
-	files     []string
-	fileStats []github.FileStat
-	fileErr   error
-	checks    github.Checks
-	checkErr  error
-	diff      string
-	trunc     bool
-	diffErr   error
-	reviews   []github.ReviewReport
-	reviewErr error
+	pr         *github.PullRequest
+	prErr      error
+	files      []string
+	fileStats  []github.FileStat
+	fileErr    error
+	checks     github.Checks
+	checkErr   error
+	diff       string
+	trunc      bool
+	diffErr    error
+	reviews    []github.ReviewReport
+	reviewErr  error
+	toucher    string
+	toucherErr error
 }
 
 func (f fakeSource) ResolveMergeable(_ context.Context, _, _ string, _ int) (*github.PullRequest, error) {
@@ -53,6 +55,10 @@ func (f fakeSource) Diff(_ context.Context, _, _ string, _, _ int) (string, bool
 
 func (f fakeSource) PullRequestReviews(_ context.Context, _, _ string, _ int) ([]github.ReviewReport, error) {
 	return f.reviews, f.reviewErr
+}
+
+func (f fakeSource) LastToucher(_ context.Context, _, _, _ string, _ []string) (string, error) {
+	return f.toucher, f.toucherErr
 }
 
 func samplePR() *github.PullRequest {
@@ -641,21 +647,86 @@ func TestPRUserOwnerFromCodeowners(t *testing.T) {
 	}
 }
 
-// A path CODEOWNERS does not name leaves user.owner / user.owners unset rather
-// than guessed at pr.author — the modules.yaml and git-history tiers are later
-// tickets (facts.md, "user.owner").
-func TestPRUserOwnerUnsetWhenCodeownersSilent(t *testing.T) {
+// A path neither CODEOWNERS nor modules.yaml names leaves user.owner /
+// user.owners unset rather than guessed at pr.author — the git-history tier is
+// a later ticket (facts.md, "user.owner").
+// A path neither CODEOWNERS nor git log resolves leaves user.owner /
+// user.owners / user.last_toucher unset rather than guessed at pr.author.
+func TestPRUserOwnerUnsetWhenCodeownersAndLastToucherSilent(t *testing.T) {
 	const co = "/internal/secret/* @alice\n"
 	src := fakeSource{pr: samplePR(), files: []string{"README.md"}}
 	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, []byte(co), nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
-	if _, ok := got["user.owner"]; ok {
-		t.Errorf("user.owner = %v, want unset", got["user.owner"])
+	for _, name := range []string{"user.owner", "user.owners", "user.last_toucher"} {
+		if _, ok := got[name]; ok {
+			t.Errorf("%s = %v, want unset", name, got[name])
+		}
 	}
-	if _, ok := got["user.owners"]; ok {
-		t.Errorf("user.owners = %v, want unset", got["user.owners"])
+}
+
+// The git-log tier (LastToucher) is the second tier of user.owner resolution,
+// consulted only when CODEOWNERS names nobody for any touched path (facts.md,
+// "user.owner"). user.last_toucher is asserted alongside user.owner /
+// user.owners exactly when this tier is what resolved them.
+func TestPRUserOwnerFromLastToucherWhenCodeownersSilent(t *testing.T) {
+	const co = "/internal/secret/* @alice\n"
+	src := fakeSource{pr: samplePR(), files: []string{"billing/invoice.go"}, toucher: "carol"}
+	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, []byte(co), nil, nil)
+	if err != nil {
+		t.Fatalf("PR: %v", err)
+	}
+	if got["user.owner"] != "carol" {
+		t.Errorf("user.owner = %v, want carol", got["user.owner"])
+	}
+	owners, ok := got["user.owners"].([]string)
+	if !ok || len(owners) != 1 || owners[0] != "carol" {
+		t.Errorf("user.owners = %v, want [carol]", got["user.owners"])
+	}
+	if got["user.last_toucher"] != "carol" {
+		t.Errorf("user.last_toucher = %v, want carol", got["user.last_toucher"])
+	}
+}
+
+// CODEOWNERS naming an owner for even one touched path wins outright — the
+// tiers are a waterfall, not a merge, so LastToucher is never even called once
+// CODEOWNERS has answered, and user.last_toucher stays unset.
+func TestPRUserOwnerCodeownersWinsOverLastToucher(t *testing.T) {
+	const co = "billing/* @alice\n"
+	src := fakeSource{pr: samplePR(), files: []string{"billing/invoice.go"}, toucher: "carol"}
+	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, []byte(co), nil, nil)
+	if err != nil {
+		t.Fatalf("PR: %v", err)
+	}
+	if got["user.owner"] != "@alice" {
+		t.Errorf("user.owner = %v, want @alice (CODEOWNERS, not the git-log tier)", got["user.owner"])
+	}
+	if _, ok := got["user.last_toucher"]; ok {
+		t.Errorf("user.last_toucher = %v, want unset (LastToucher never called)", got["user.last_toucher"])
+	}
+}
+
+// A repo with no CODEOWNERS at all still falls to the git-log tier, not just a
+// CODEOWNERS silent on the specific path.
+func TestPRUserOwnerFromLastToucherWithNoCodeowners(t *testing.T) {
+	src := fakeSource{pr: samplePR(), files: []string{"billing/invoice.go"}, toucher: "carol"}
+	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("PR: %v", err)
+	}
+	if got["user.owner"] != "carol" {
+		t.Errorf("user.owner = %v, want carol", got["user.owner"])
+	}
+}
+
+// A LastToucher failure fails the whole extraction, same shape as any other
+// extractor in this package — never a partial set (package comment).
+func TestPRFailsWhenLastToucherErrors(t *testing.T) {
+	src := fakeSource{pr: samplePR(), files: []string{"billing/invoice.go"}, toucherErr: errors.New("rate limited")}
+	_, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil)
+	if err == nil {
+		t.Fatal("PR: want error, got nil")
 	}
 }
 

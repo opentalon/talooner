@@ -37,10 +37,9 @@ func parseCodeowners(data []byte) []codeownerRule {
 // resolveOwners finds who owns the changed paths. The primary owner is the first
 // owner of the first touched path CODEOWNERS assigns; owners is the sorted,
 // de-duplicated union of every owner across every touched path. Both come back
-// empty when CODEOWNERS assigns nothing to any touched path — which is the
-// truthful answer here, not "nobody owns it": the modules.yaml and git-history
-// fallbacks (facts.md, "user.owner") are later tickets, so a path with no
-// CODEOWNERS rule is left unowned rather than guessed at pr.author.
+// empty when CODEOWNERS assigns nothing to any touched path — the caller then
+// falls to the git-log tier (facts.md, "user.owner"; see LastToucher) rather
+// than guessing at pr.author.
 func resolveOwners(rules []codeownerRule, paths []string) (primary string, owners []string) {
 	seen := make(map[string]bool)
 	first := true

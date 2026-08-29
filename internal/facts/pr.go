@@ -27,6 +27,10 @@ type Source interface {
 	// PullRequestReviews is every review ever submitted, unfolded — review.*
 	// facts fold it to current state per login (facts.md, "review.*").
 	PullRequestReviews(ctx context.Context, owner, repo string, number int) ([]github.ReviewReport, error)
+	// LastToucher is the second tier of user.owner resolution (facts.md,
+	// "user.owner"), called only when CODEOWNERS names nobody for any touched
+	// path. It returns "" rather than an error when nothing resolves.
+	LastToucher(ctx context.Context, owner, repo, baseSHA string, paths []string) (string, error)
 }
 
 // PR extracts the built-in pr.* facts (facts.md, "Built-in pr.* facts"). They
@@ -49,9 +53,10 @@ type Source interface {
 // codeowners is the repo's CODEOWNERS file, read from the base branch at its own
 // ref (facts.md, "user.owner"); it is nil when the repo has none. user.owner and
 // user.owners are derived from it against the changed paths — the first tier of
-// the owner resolution order. The modules.yaml and git-history tiers are later
-// tickets, so a path CODEOWNERS does not cover is left unowned rather than
-// guessed (see resolveOwners).
+// the owner resolution order (see resolveOwners). When it names nobody for any
+// touched path, the second tier — the author of the most recent prior commit to
+// a touched path, via LastToucher — is consulted instead. modules.yaml's owner:
+// is not in this chain; it only feeds module.owner (below).
 //
 // modules is the repo's .github/talooner/modules.yaml (facts.md, "module.*"),
 // read from the base branch like the ruleset so a fork PR cannot redefine what it
@@ -176,10 +181,13 @@ func PR(ctx context.Context, src Source, owner, repo string, number int, checks 
 	}
 
 	// user.* facts (facts.md, "user.*"): user.author is pr.author for symmetry,
-	// user.reviewer the standing review request, user.owner / user.owners the
-	// CODEOWNERS-derived ownership. All read data already fetched here; the
-	// CODEOWNERS content is passed in rather than re-read.
-	userFacts(s, pr, changed, codeowners)
+	// user.reviewer the standing review request, user.owner / user.owners /
+	// user.last_toucher the CODEOWNERS/git-log-derived ownership. All read data
+	// already fetched here; the CODEOWNERS content is passed in rather than
+	// re-read.
+	if err := userFacts(ctx, src, s, owner, repo, pr, changed, codeowners); err != nil {
+		return nil, fmt.Errorf("extract user.owner for %s/%s#%d: %w", owner, repo, number, err)
+	}
 	// module.* facts (facts.md, "module.*"): bound to the primary touched module
 	// by most changed lines, with module.touched_count always asserted. The file
 	// stats are already in hand from the ChangedFileStats fetch above.
@@ -192,7 +200,7 @@ func PR(ctx context.Context, src Source, owner, repo string, number int, checks 
 }
 
 // userFacts asserts the user.* namespace (facts.md, "user.*") into s.
-func userFacts(s Set, pr *github.PullRequest, changed []string, codeowners []byte) {
+func userFacts(ctx context.Context, src Source, s Set, owner, repo string, pr *github.PullRequest, changed []string, codeowners []byte) error {
 	// user.author aliases pr.author for symmetry. Always asserted: a rule quoting
 	// user.author on a PR with no author is not a real case, but an omitted fact
 	// there would read as a dead extractor (facts.md, "Unset is false").
@@ -208,17 +216,36 @@ func userFacts(s Set, pr *github.PullRequest, changed []string, codeowners []byt
 		s.String("user.reviewer", t[0])
 	}
 
-	// user.owner / user.owners come from CODEOWNERS, the first tier of the owner
-	// resolution order (facts.md). A repo without CODEOWNERS, or one whose
-	// CODEOWNERS names no owner for any touched path, leaves both facts unset
-	// rather than guessed at pr.author — the modules.yaml and git-history tiers
-	// are later tickets.
+	// user.owner / user.owners: CODEOWNERS is the first tier of the resolution
+	// order (facts.md, "user.owner"). A repo without CODEOWNERS, or one whose
+	// CODEOWNERS names no owner for any touched path, tries the second tier
+	// next rather than leaving the facts unset outright.
 	if len(codeowners) > 0 {
 		if primary, owners := resolveOwners(parseCodeowners(codeowners), changed); owners != nil {
 			s.String("user.owner", primary)
 			s.Strings("user.owners", owners)
+			return nil
 		}
 	}
+
+	// Tier 2: the author of the most recent prior commit to a touched path,
+	// via LastToucher (facts.md, "user.owner"). It is a real API call — one per
+	// touched path, capped — so it only runs when tier 1 did not already
+	// answer. user.last_toucher is asserted alongside user.owner / user.owners
+	// exactly when this tier is what resolved them; it is not computed when
+	// CODEOWNERS already won, so a rule reading it should not expect it on
+	// every PR. Tier 3 is unset: not pr.author, for the same reason CODEOWNERS
+	// silence does not fall back to the author either.
+	toucher, err := src.LastToucher(ctx, owner, repo, pr.BaseSHA, changed)
+	if err != nil {
+		return fmt.Errorf("last toucher: %w", err)
+	}
+	if toucher != "" {
+		s.String("user.owner", toucher)
+		s.Strings("user.owners", []string{toucher})
+		s.String("user.last_toucher", toucher)
+	}
+	return nil
 }
 
 // derivePassing turns the head sha's CI into one pass-gate fact for a set of

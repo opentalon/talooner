@@ -499,6 +499,12 @@ func (g *fakeGitHub) client(t *testing.T) *github.Client {
 		case strings.HasSuffix(r.URL.Path, "/check-runs"):
 			_, _ = fmt.Fprint(w, `{"total_count":0,"check_runs":[]}`)
 
+		case strings.HasSuffix(r.URL.Path, "/commits"):
+			// No prior commit history for any path: the git-log tier of
+			// user.owner resolution finds nothing, same as a repo with no
+			// CODEOWNERS — none of these tests assert on user.owner.
+			_, _ = fmt.Fprint(w, `[]`)
+
 		default: // the pull request itself
 			if g.prStatus != 0 {
 				w.WriteHeader(g.prStatus)
