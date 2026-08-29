@@ -38,8 +38,8 @@ func parseCodeowners(data []byte) []codeownerRule {
 // owner of the first touched path CODEOWNERS assigns; owners is the sorted,
 // de-duplicated union of every owner across every touched path. Both come back
 // empty when CODEOWNERS assigns nothing to any touched path — the caller then
-// falls to the modules.yaml tier (facts.md, "user.owner"; see
-// resolveModuleOwners) rather than guessing at pr.author.
+// falls to the git-log tier (facts.md, "user.owner"; see LastToucher) rather
+// than guessing at pr.author.
 func resolveOwners(rules []codeownerRule, paths []string) (primary string, owners []string) {
 	seen := make(map[string]bool)
 	first := true

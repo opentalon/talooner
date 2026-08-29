@@ -14,18 +14,20 @@ import (
 // fakeSource stands in for *github.Client. The extractor is a pure function of
 // the API responses, so there is nothing here worth an httptest server.
 type fakeSource struct {
-	pr        *github.PullRequest
-	prErr     error
-	files     []string
-	fileStats []github.FileStat
-	fileErr   error
-	checks    github.Checks
-	checkErr  error
-	diff      string
-	trunc     bool
-	diffErr   error
-	reviews   []github.ReviewReport
-	reviewErr error
+	pr         *github.PullRequest
+	prErr      error
+	files      []string
+	fileStats  []github.FileStat
+	fileErr    error
+	checks     github.Checks
+	checkErr   error
+	diff       string
+	trunc      bool
+	diffErr    error
+	reviews    []github.ReviewReport
+	reviewErr  error
+	toucher    string
+	toucherErr error
 }
 
 func (f fakeSource) ResolveMergeable(_ context.Context, _, _ string, _ int) (*github.PullRequest, error) {
@@ -53,6 +55,10 @@ func (f fakeSource) Diff(_ context.Context, _, _ string, _, _ int) (string, bool
 
 func (f fakeSource) PullRequestReviews(_ context.Context, _, _ string, _ int) ([]github.ReviewReport, error) {
 	return f.reviews, f.reviewErr
+}
+
+func (f fakeSource) LastToucher(_ context.Context, _, _, _ string, _ []string) (string, error) {
+	return f.toucher, f.toucherErr
 }
 
 func samplePR() *github.PullRequest {
@@ -644,73 +650,83 @@ func TestPRUserOwnerFromCodeowners(t *testing.T) {
 // A path neither CODEOWNERS nor modules.yaml names leaves user.owner /
 // user.owners unset rather than guessed at pr.author — the git-history tier is
 // a later ticket (facts.md, "user.owner").
-func TestPRUserOwnerUnsetWhenCodeownersSilent(t *testing.T) {
+// A path neither CODEOWNERS nor git log resolves leaves user.owner /
+// user.owners / user.last_toucher unset rather than guessed at pr.author.
+func TestPRUserOwnerUnsetWhenCodeownersAndLastToucherSilent(t *testing.T) {
 	const co = "/internal/secret/* @alice\n"
 	src := fakeSource{pr: samplePR(), files: []string{"README.md"}}
 	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, []byte(co), nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
-	if _, ok := got["user.owner"]; ok {
-		t.Errorf("user.owner = %v, want unset", got["user.owner"])
-	}
-	if _, ok := got["user.owners"]; ok {
-		t.Errorf("user.owners = %v, want unset", got["user.owners"])
+	for _, name := range []string{"user.owner", "user.owners", "user.last_toucher"} {
+		if _, ok := got[name]; ok {
+			t.Errorf("%s = %v, want unset", name, got[name])
+		}
 	}
 }
 
-// modules.yaml's owner: is the second tier of user.owner resolution, consulted
-// only when CODEOWNERS names nobody for any touched path (facts.md,
-// "user.owner").
-func TestPRUserOwnerFromModulesWhenCodeownersSilent(t *testing.T) {
+// The git-log tier (LastToucher) is the second tier of user.owner resolution,
+// consulted only when CODEOWNERS names nobody for any touched path (facts.md,
+// "user.owner"). user.last_toucher is asserted alongside user.owner /
+// user.owners exactly when this tier is what resolved them.
+func TestPRUserOwnerFromLastToucherWhenCodeownersSilent(t *testing.T) {
 	const co = "/internal/secret/* @alice\n"
-	modules := []config.Module{
-		{Path: "billing/", Owner: "@org/payments"},
-		{Path: "docs/", Owner: ""},
-	}
-	src := fakeSource{pr: samplePR(), files: []string{"billing/invoice.go", "docs/README.md"}}
-	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, []byte(co), modules, nil)
+	src := fakeSource{pr: samplePR(), files: []string{"billing/invoice.go"}, toucher: "carol"}
+	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, []byte(co), nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
-	if got["user.owner"] != "@org/payments" {
-		t.Errorf("user.owner = %v, want @org/payments", got["user.owner"])
+	if got["user.owner"] != "carol" {
+		t.Errorf("user.owner = %v, want carol", got["user.owner"])
 	}
 	owners, ok := got["user.owners"].([]string)
-	if !ok || len(owners) != 1 || owners[0] != "@org/payments" {
-		t.Errorf("user.owners = %v, want [@org/payments]", got["user.owners"])
+	if !ok || len(owners) != 1 || owners[0] != "carol" {
+		t.Errorf("user.owners = %v, want [carol]", got["user.owners"])
+	}
+	if got["user.last_toucher"] != "carol" {
+		t.Errorf("user.last_toucher = %v, want carol", got["user.last_toucher"])
 	}
 }
 
 // CODEOWNERS naming an owner for even one touched path wins outright — the
-// tiers are a waterfall, not a per-path merge, so modules.yaml is never
-// consulted once CODEOWNERS has answered.
-func TestPRUserOwnerCodeownersWinsOverModules(t *testing.T) {
+// tiers are a waterfall, not a merge, so LastToucher is never even called once
+// CODEOWNERS has answered, and user.last_toucher stays unset.
+func TestPRUserOwnerCodeownersWinsOverLastToucher(t *testing.T) {
 	const co = "billing/* @alice\n"
-	modules := []config.Module{
-		{Path: "billing/", Owner: "@org/payments"},
-	}
-	src := fakeSource{pr: samplePR(), files: []string{"billing/invoice.go"}}
-	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, []byte(co), modules, nil)
+	src := fakeSource{pr: samplePR(), files: []string{"billing/invoice.go"}, toucher: "carol"}
+	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, []byte(co), nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
 	if got["user.owner"] != "@alice" {
-		t.Errorf("user.owner = %v, want @alice (CODEOWNERS, not modules.yaml)", got["user.owner"])
+		t.Errorf("user.owner = %v, want @alice (CODEOWNERS, not the git-log tier)", got["user.owner"])
+	}
+	if _, ok := got["user.last_toucher"]; ok {
+		t.Errorf("user.last_toucher = %v, want unset (LastToucher never called)", got["user.last_toucher"])
 	}
 }
 
-// A repo with no CODEOWNERS at all still falls to modules.yaml, not just a
+// A repo with no CODEOWNERS at all still falls to the git-log tier, not just a
 // CODEOWNERS silent on the specific path.
-func TestPRUserOwnerFromModulesWithNoCodeowners(t *testing.T) {
-	modules := []config.Module{{Path: "billing/", Owner: "@org/payments"}}
-	src := fakeSource{pr: samplePR(), files: []string{"billing/invoice.go"}}
-	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, modules, nil)
+func TestPRUserOwnerFromLastToucherWithNoCodeowners(t *testing.T) {
+	src := fakeSource{pr: samplePR(), files: []string{"billing/invoice.go"}, toucher: "carol"}
+	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
-	if got["user.owner"] != "@org/payments" {
-		t.Errorf("user.owner = %v, want @org/payments", got["user.owner"])
+	if got["user.owner"] != "carol" {
+		t.Errorf("user.owner = %v, want carol", got["user.owner"])
+	}
+}
+
+// A LastToucher failure fails the whole extraction, same shape as any other
+// extractor in this package — never a partial set (package comment).
+func TestPRFailsWhenLastToucherErrors(t *testing.T) {
+	src := fakeSource{pr: samplePR(), files: []string{"billing/invoice.go"}, toucherErr: errors.New("rate limited")}
+	_, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil)
+	if err == nil {
+		t.Fatal("PR: want error, got nil")
 	}
 }
 
@@ -864,50 +880,4 @@ func TestModuleOwns(t *testing.T) {
 			t.Errorf("moduleOwns(%q, %q) = %v, want %v", c.prefix, c.path, got, c.want)
 		}
 	}
-}
-
-func TestResolveModuleOwners(t *testing.T) {
-	t.Run("nested module wins on the more specific path", func(t *testing.T) {
-		modules := []config.Module{
-			{Path: "internal/", Owner: "@org/core"},
-			{Path: "internal/auth/", Owner: "@alice"},
-		}
-		primary, owners := resolveModuleOwners(modules, []string{"internal/auth/token.go"})
-		if primary != "@alice" {
-			t.Errorf("primary = %v, want @alice (more specific module)", primary)
-		}
-		if !reflect.DeepEqual(owners, []string{"@alice"}) {
-			t.Errorf("owners = %v, want [@alice]", owners)
-		}
-	})
-
-	t.Run("a module with no owner declared is skipped", func(t *testing.T) {
-		modules := []config.Module{{Path: "docs/", Owner: ""}}
-		primary, owners := resolveModuleOwners(modules, []string{"docs/README.md"})
-		if primary != "" || owners != nil {
-			t.Errorf("primary/owners = %q/%v, want unset", primary, owners)
-		}
-	})
-
-	t.Run("union across touched paths is sorted and de-duplicated", func(t *testing.T) {
-		modules := []config.Module{
-			{Path: "billing/", Owner: "@org/payments"},
-			{Path: "internal/auth/", Owner: "@alice"},
-		}
-		primary, owners := resolveModuleOwners(modules, []string{"internal/auth/token.go", "billing/invoice.go", "billing/other.go"})
-		if primary != "@alice" {
-			t.Errorf("primary = %v, want @alice (first touched path)", primary)
-		}
-		if !reflect.DeepEqual(owners, []string{"@alice", "@org/payments"}) {
-			t.Errorf("owners = %v, want [@alice @org/payments]", owners)
-		}
-	})
-
-	t.Run("no configured module covers any touched path", func(t *testing.T) {
-		modules := []config.Module{{Path: "billing/", Owner: "@org/payments"}}
-		primary, owners := resolveModuleOwners(modules, []string{"README.md"})
-		if primary != "" || owners != nil {
-			t.Errorf("primary/owners = %q/%v, want unset", primary, owners)
-		}
-	})
 }

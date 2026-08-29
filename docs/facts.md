@@ -243,7 +243,7 @@ and the whole reason to have both.
 
 | Fact | Type | Source |
 |---|---|---|
-| `user.owner` | string | Primary owner of the touched code — CODEOWNERS, else `modules.yaml` |
+| `user.owner` | string | Primary owner of the touched code — CODEOWNERS, else the most recent toucher |
 | `user.owners` | list\<string\> | All owners across touched paths |
 | `user.author` | string | Alias of `pr.author`, for symmetry |
 | `user.reviewer` | string | Currently requested reviewer, if one |
@@ -254,12 +254,16 @@ Resolution order for `user.owner`, first hit wins:
 1. `.github/CODEOWNERS` — GitHub's own mechanism, already in most repos, already
    the thing people maintain. Reusing it beats inventing a parallel ownership
    file that drifts.
-2. `owner:` in `modules.yaml`, for repos without CODEOWNERS or where Talooner
-   ownership should differ from GitHub's auto-request behaviour.
-3. `user.last_toucher` from `git log` on the touched paths.
-4. Unset. Not `pr.author` — falling back to the author would let a rule
+2. `user.last_toucher` — the author of the most recent commit to touch any of
+   the changed paths, from `git log` on the base branch (a fork PR's own
+   commits are never in view).
+3. Unset. Not `pr.author` — falling back to the author would let a rule
    "escalate to the owner" silently escalate to the person who wrote the change,
    which is exactly the wrong answer and is invisible when it happens.
+
+`modules.yaml`'s `owner:` is not in this chain — it only feeds `module.owner`
+(below), a separate fact for a separate purpose (the module's documented owner,
+not necessarily who a rule should escalate a specific PR to).
 
 ### Implemented in v1 (C5)
 
@@ -270,30 +274,38 @@ is requested.
 
 `user.owner` and `user.owners` are a waterfall over tiers 1–2, not a per-path
 merge: tier 1 (CODEOWNERS) is tried against every changed path first, and only
-when it names nobody for *any* of them does tier 2 (`modules.yaml`) run at all.
-Tier 1: the last matching CODEOWNERS rule wins per GitHub, `user.owners` is the
-sorted, de-duplicated union across every touched path, `user.owner` is the first
-owner of the first touched path CODEOWNERS assigns. CODEOWNERS is read from the
-**base** branch at its own ref, like the ruleset and config (architecture.md,
-"Fork safety") — a fork PR cannot name its own owners. The three locations
-GitHub consults (`.github/CODEOWNERS`, `CODEOWNERS`, `docs/CODEOWNERS`) are
-tried in priority order.
+when it names nobody for *any* of them is tier 2 (git log) even called — it is a
+real API call per touched path, so it is never paid for a PR CODEOWNERS already
+answers. Tier 1: the last matching CODEOWNERS rule wins per GitHub,
+`user.owners` is the sorted, de-duplicated union across every touched path,
+`user.owner` is the first owner of the first touched path CODEOWNERS assigns.
+CODEOWNERS is read from the **base** branch at its own ref, like the ruleset and
+config (architecture.md, "Fork safety") — a fork PR cannot name its own owners.
+The three locations GitHub consults (`.github/CODEOWNERS`, `CODEOWNERS`,
+`docs/CODEOWNERS`) are tried in priority order.
 
-Tier 2 reads the same `modules.yaml` load `module.*` uses (below), matching each
-touched path against configured module prefixes and taking the declared
-`owner:`; a nested module resolves to the most specific (longest) matching
-prefix, the same "most specific wins" rule CODEOWNERS itself uses. A module with
-no `owner:` declared contributes nothing. `user.owner` is the first declared
-owner of the first touched path a module covers; `user.owners` is the sorted,
-de-duplicated union across every touched path, same shape as tier 1.
+Tier 2 queries GitHub's commits API, one path at a time — the endpoint takes a
+single `path` filter, so there is no one-call equivalent of `git log -- path1
+path2 ...` — capped at the first 25 changed paths (changed-file order) to bound
+worst-case API calls on a huge PR; that cap is a documented, deterministic scope,
+not a guess. History is walked from the PR's **base** sha, the same trust
+boundary as tier 1, so a fork PR's own commits never count. The winner is the
+single most recent commit across every queried path; its GitHub login is
+`user.owner` (and the sole entry of `user.owners`) and is also asserted as
+`user.last_toucher`. A commit whose author has no linked GitHub account, or a
+path with no prior commit at all (added by this PR), contributes nothing —
+never guessed from a raw git name or email.
 
-Tier 3 (`git log` last-toucher) is **not** implemented in v1. A path neither
-CODEOWNERS nor `modules.yaml` covers therefore leaves `user.owner` /
-`user.owners` **unset** rather than guessed at `pr.author`: the extractor does
-not pretend to know the owner. `user.last_toucher` is likewise not asserted yet.
-These gaps are safe under "Unset is false" — a rule gated on
+`user.last_toucher` is asserted **only** when tier 2 is what resolved
+`user.owner` — i.e. CODEOWNERS was silent and the git-log query found a linked
+author. It is not computed, and stays unset, whenever CODEOWNERS already
+answered; a rule reading it directly should not expect it on every PR.
+
+A path neither tier covers — no CODEOWNERS, and no linked-account commit history
+either — leaves `user.owner`, `user.owners`, and `user.last_toucher` **unset**
+rather than guessed at `pr.author`. Safe under "Unset is false" — a rule gated on
 `attr "user.owner" == ...` simply does not fire for a path neither tier covers,
-the same quiet non-match as a repo with neither file.
+the same quiet non-match as a repo with neither signal.
 
 ```yaml
 # .github/talooner/modules.yaml
