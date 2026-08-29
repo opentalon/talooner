@@ -73,6 +73,12 @@ const ModulePath = ".github/talooner/modules.yaml"
 // the path-derived target); malformed is a tenant error that fails the run.
 const TeamPath = ".github/talooner/teams.yaml"
 
+// ArchitecturePath is the tenant's code_unit layer override/extension
+// (expert-review-system.md, Phase 1), read from the base branch alongside the
+// ruleset. Missing is an answer (the built-in per-language conventions decide
+// alone); malformed is a tenant error that fails the run.
+const ArchitecturePath = ".github/talooner/architecture.yaml"
+
 // Runner is one run's dependencies, already built and connected.
 type Runner struct {
 	Event   *event.Event
@@ -236,8 +242,16 @@ func (r Runner) evaluate(ctx context.Context, repo string, pr *github.PullReques
 	if err != nil {
 		return r.configBroken(ctx, repo, pr, err)
 	}
+	// architecture.yaml feeds code.* (expert-review-system.md, Phase 1), read
+	// from the base branch like modules.yaml so a fork PR cannot redefine its
+	// own layer conventions. A repo with none is an answer, not an error — the
+	// built-in per-language conventions decide alone.
+	arch, err := r.loadArchitecture(ctx, ev.Owner, ev.Repo, pr.BaseRef)
+	if err != nil {
+		return r.configBroken(ctx, repo, pr, err)
+	}
 
-	set, err := facts.PR(ctx, r.GitHub, ev.Owner, ev.Repo, ev.PR, cfg.Checks, codeowners, modules, teams)
+	set, err := facts.PR(ctx, r.GitHub, ev.Owner, ev.Repo, ev.PR, cfg.Checks, codeowners, modules, teams, arch)
 	if err != nil {
 		return err // already names the repo and PR, and is never partial
 	}
@@ -418,6 +432,26 @@ func (r Runner) loadTeams(ctx context.Context, owner, repo, ref string) (config.
 		return nil, fmt.Errorf("parse %s from %s/%s@%s: %w", TeamPath, owner, repo, ref, err)
 	}
 	return teams, nil
+}
+
+// loadArchitecture reads the tenant's .github/talooner/architecture.yaml from
+// the base branch and parses it into code_unit layer overrides. A missing file
+// is an answer — the built-in per-language conventions decide unit kind and doc
+// alone. A present but unparseable file is a tenant error that fails the run,
+// the same shape as a broken modules.yaml.
+func (r Runner) loadArchitecture(ctx context.Context, owner, repo, ref string) ([]config.ArchitectureRule, error) {
+	data, err := r.GitHub.FileContent(ctx, owner, repo, ArchitecturePath, ref)
+	if errors.Is(err, github.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load %s from %s/%s@%s: %w", ArchitecturePath, owner, repo, ref, err)
+	}
+	arch, err := config.ParseArchitecture(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s from %s/%s@%s: %w", ArchitecturePath, owner, repo, ref, err)
+	}
+	return arch, nil
 }
 
 // gate parses the command in a comment and checks the commander's access. It
@@ -626,6 +660,10 @@ func (r Runner) planReply(ctx context.Context, repo string, pr *github.PullReque
 	if err != nil {
 		return fmt.Errorf("load teams for %s#%d: %w", repo, ev.PR, err)
 	}
+	arch, err := r.loadArchitecture(ctx, ev.Owner, ev.Repo, pr.BaseRef)
+	if err != nil {
+		return fmt.Errorf("load architecture for %s#%d: %w", repo, ev.PR, err)
+	}
 
 	ruleset, err := r.GitHub.FileContent(ctx, ev.Owner, ev.Repo, RulesetPath, pr.HeadSHA)
 	if errors.Is(err, github.ErrNotFound) {
@@ -639,7 +677,7 @@ func (r Runner) planReply(ctx context.Context, repo string, pr *github.PullReque
 		return fmt.Errorf("load head ruleset for %s#%d: %w", repo, ev.PR, err)
 	}
 
-	set, err := facts.PR(ctx, r.GitHub, ev.Owner, ev.Repo, ev.PR, cfg.Checks, codeowners, modules, teams)
+	set, err := facts.PR(ctx, r.GitHub, ev.Owner, ev.Repo, ev.PR, cfg.Checks, codeowners, modules, teams, arch)
 	if err != nil {
 		return err // already names the repo and PR, and is never partial
 	}

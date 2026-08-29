@@ -550,6 +550,79 @@ the other option and was not taken, to keep the default secret-free.
 readable with no extra scope, so it is a direct match against the resolved
 team's slug.
 
+## `code.*` — the LLM-review gate
+
+**Phase 1 of [`expert-review-system.md`](expert-review-system.md), shipped.**
+`architectureFacts` (`internal/facts/architecture.go`) classifies every changed
+file into a `code_unit` — a touched model, controller, or service — and rolls
+the result up into PR-level facts a ruleset can gate on cheaply, before any
+LLM spend. The per-unit records themselves (`kind`, `path`, `important`,
+`doc_ref`, `diff_slice`) are not sent to the cluster yet: Phase 2 adds the
+proto field that carries them (`expert-review-system.md`, "Phase 2"). Today
+`code.*` is the gate half only.
+
+| Fact | Type | When asserted |
+|---|---|---|
+| `code.models_changed` | list\<string\> | Always — the touched model unit paths |
+| `code.controllers_changed` | list\<string\> | Always — the touched controller unit paths |
+| `code.services_changed` | list\<string\> | Always — the touched service unit paths |
+| `code.touches_model` | bool | Always — `code.models_changed` is non-empty |
+| `code.touches_controller` | bool | Always — `code.controllers_changed` is non-empty |
+| `code.touches_service` | bool | Always — `code.services_changed` is non-empty |
+
+All six are always asserted, empty list / `false` included — a PR touching
+nothing under a known layer gets the honest zero, not a dead extractor (see
+"Unset is false" below).
+
+### Unit granularity: file for Rails, package directory for Go
+
+A changed file is classified by the longest matching prefix, checked against
+`architecture.yaml` overrides first, then the built-in layer table:
+
+| Prefix | Kind | Unit |
+|---|---|---|
+| `app/models/` | model | the file itself |
+| `app/controllers/` | controller | the file itself |
+| `app/services/` | service | the file itself |
+| `internal/<pkg>/` | service | the top-level directory under `internal/` |
+| `cmd/<pkg>/` | service | the top-level directory under `cmd/` |
+
+Both tables are checked on every PR regardless of what language the repo is
+actually written in: Talooner has no repo-tree listing to detect that from,
+only the changed files a run already fetched, and a Rails prefix can never
+collide with a Go one, so this costs nothing and needs no extra API call. A
+file directly under `internal/` or `cmd/` with no package subdirectory (e.g.
+`internal/doc.go`) forms no unit — "package dirs" means a subdirectory, not a
+loose file at the prefix root.
+
+A unit's `doc_ref` follows a co-located naming convention: strip the file
+extension, then the kind's conventional suffix (`_service`, `_controller`) if
+it has one, then look under `docs/<kind>s/`. `app/services/orders_service.rb`
+→ `docs/services/orders.md`; a Go unit's directory name is used directly:
+`internal/auth` → `docs/services/auth.md`.
+
+### `architecture.yaml`: override or extend the built-in layers
+
+```yaml
+# .github/talooner/architecture.yaml
+- path: app/services/orders_service.rb
+  kind: service
+  doc_ref: docs/services/orders.md
+- path: legacy/
+  kind: model
+```
+
+Read from the base branch like `modules.yaml`, so a fork PR cannot redefine
+its own layer conventions. A rule's `path` is a prefix, matched the same way
+`module.*`'s prefixes are; the longest matching prefix wins, so a narrower
+override beats a broader one and beats the built-in table. `kind` is required
+and must be `model`, `controller` or `service` — a tenant error otherwise, the
+same shape as an unparseable `modules.yaml`. `doc_ref` may be omitted: the
+unit still exists with its overridden kind, it simply carries no doc to review
+against — an override does not fall back to the co-located naming convention,
+because a maintainer writing an override past the built-in tables has no
+convention to fall back to.
+
 ## `llm_review.*`
 
 **Not implemented in code yet — spec only, unshipped.** Nothing in this repo

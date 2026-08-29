@@ -147,3 +147,49 @@ func TestParseTeamsRejectsCredentialFields(t *testing.T) {
 		t.Error("ParseTeams = nil error, want one naming the credential-shaped field")
 	}
 }
+
+// architecture.yaml overrides or extends the built-in layer conventions: a
+// path prefix, its kind, and the doc it should be checked against.
+func TestParseArchitecture(t *testing.T) {
+	rules, err := ParseArchitecture([]byte(`
+- path: app/services/orders_service.rb
+  kind: service
+  doc_ref: docs/services/orders.md
+- path: legacy/
+  kind: model
+`))
+	if err != nil {
+		t.Fatalf("ParseArchitecture: %v", err)
+	}
+	if len(rules) != 2 {
+		t.Fatalf("rules = %d, want 2", len(rules))
+	}
+	if rules[0].Path != "app/services/orders_service.rb" || rules[0].Kind != "service" || rules[0].DocRef != "docs/services/orders.md" {
+		t.Errorf("rule[0] = %+v, want the orders entry verbatim", rules[0])
+	}
+	if rules[1].DocRef != "" {
+		t.Errorf("rule[1].DocRef = %q, want empty (no doc override declared)", rules[1].DocRef)
+	}
+
+	if _, err := ParseArchitecture([]byte("path: [\n")); err == nil {
+		t.Error("ParseArchitecture returned nil error for malformed YAML, want one")
+	}
+}
+
+func TestParseArchitectureRejectsUnknownKind(t *testing.T) {
+	if _, err := ParseArchitecture([]byte("- path: internal/\n  kind: repository\n")); err == nil {
+		t.Error("ParseArchitecture = nil error, want one naming the invalid kind")
+	}
+}
+
+func TestParseArchitectureRejectsPathEscape(t *testing.T) {
+	if _, err := ParseArchitecture([]byte("- path: ../../etc\n  kind: model\n")); err == nil {
+		t.Error("ParseArchitecture = nil error, want a rejected path")
+	}
+}
+
+func TestParseArchitectureRejectsCredentialFields(t *testing.T) {
+	if _, err := ParseArchitecture([]byte("- path: internal/\n  kind: service\n  api_token: xyz\n")); err == nil {
+		t.Error("ParseArchitecture = nil error, want one naming the credential-shaped field")
+	}
+}

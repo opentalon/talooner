@@ -58,8 +58,12 @@ func (r Runner) Plan(ctx context.Context, owner, repo string, prNum int, w io.Wr
 	if err != nil {
 		return err
 	}
+	arch, err := r.loadArchitecture(ctx, owner, repo, pr.BaseRef)
+	if err != nil {
+		return err
+	}
 
-	set, err := facts.PR(ctx, r.GitHub, owner, repo, prNum, cfg.Checks, codeowners, modules, teams)
+	set, err := facts.PR(ctx, r.GitHub, owner, repo, prNum, cfg.Checks, codeowners, modules, teams, arch)
 	if err != nil {
 		return err
 	}
