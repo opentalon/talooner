@@ -273,6 +273,23 @@ rule "Block on any documented-behavior drift" {
 }
 ```
 
+> **Shipped 2026-08-30** (#80's talooner-only slice), diverged from the plan below
+> in one particular: no "k of n units drifted" count. `internal/comment/` already
+> folded multiple `do comment` actions into one sticky comment before this issue —
+> generic over action text, verified with a code_unit-drift-shaped test
+> (`TestReviewFoldsMultipleCodeUnitDriftFindingsIntoOneComment`) rather than new
+> aggregation code. `internal/check/`'s summary now reports "N units evaluated"
+> (`check.Decision`'s `unitCount` param) but not how many drifted: `taloonerpb.Action`
+> carries no rule or code_unit identity, so the bot cannot attribute a comment/block
+> action back to the drift rule specifically versus any other rule in the same
+> ruleset that also comments or blocks. Getting `k` right needs a wire-level change
+> (e.g. a code_unit/rule id on `Action` or `RuleFiring`) — talooner-plugin territory,
+> not filed yet. The `WhyNotEvaluated`-style path for `llm_review.result == "error"`
+> also did not ship here: the bot only ever sees `unit.llm_result` if a ruleset rule
+> reacts to it, and there's no built-in warning code for a per-unit LLM error today
+> (`talooner-plugin/internal/service/evaluate.go`'s `mapActions` has none) — same
+> wire-level gap, also talooner-plugin territory.
+
 - Multiple comment actions (one per drifting unit) must fold into the single sticky
   comment — `internal/comment/` needs to aggregate rather than post N comments; this
   is the main bot-side rendering change per-service granularity introduces.

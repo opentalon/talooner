@@ -45,7 +45,7 @@ func TestDecisionConclusions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cr := Decision(tt.actions, nil, "")
+			cr := Decision(tt.actions, nil, "", 0)
 			if cr.Conclusion != tt.want {
 				t.Errorf("conclusion = %q, want %q", cr.Conclusion, tt.want)
 			}
@@ -60,7 +60,7 @@ func TestDecisionConclusions(t *testing.T) {
 }
 
 func TestDecisionSaysWhenNothingFired(t *testing.T) {
-	cr := Decision(nil, nil, "")
+	cr := Decision(nil, nil, "", 0)
 	if !strings.Contains(cr.Summary, "No rule matched") {
 		t.Errorf("summary should say no rule matched, got %q", cr.Summary)
 	}
@@ -77,6 +77,7 @@ func TestDecisionSurfacesTheTieWarning(t *testing.T) {
 		[]action.Action{act(action.VerbApprove), act(action.VerbBlock)},
 		[]Warning{{Code: "unresolved_conflict", Message: "approve and block both fired"}},
 		"2 rules fired",
+		0,
 	)
 	for _, want := range []string{"2 rules fired", "unresolved_conflict", "approve and block both fired", "overrides"} {
 		if !strings.Contains(cr.Summary, want) {
@@ -86,9 +87,34 @@ func TestDecisionSurfacesTheTieWarning(t *testing.T) {
 }
 
 func TestDecisionWarningWithNoCode(t *testing.T) {
-	cr := Decision([]action.Action{act(action.VerbComment)}, []Warning{{Message: "the llm_review feature is off"}}, "")
+	cr := Decision([]action.Action{act(action.VerbComment)}, []Warning{{Message: "the llm_review feature is off"}}, "", 0)
 	if !strings.Contains(cr.Summary, "the llm_review feature is off") {
 		t.Errorf("summary is missing the warning:\n%s", cr.Summary)
+	}
+}
+
+// unitCount is how many code_unit records the run sent for llm_review — the
+// bot has no per-unit result back from the plugin (talooner-plugin's wire
+// types carry no rule/code_unit identity on an action), so this reports how
+// many units were in scope, not how many drifted.
+func TestDecisionReportsHowManyCodeUnitsWereEvaluated(t *testing.T) {
+	cr := Decision(nil, nil, "", 3)
+	if !strings.Contains(cr.Summary, "3 code units evaluated") {
+		t.Errorf("summary should say how many code units were evaluated:\n%s", cr.Summary)
+	}
+}
+
+func TestDecisionReportsOneCodeUnitEvaluatedSingular(t *testing.T) {
+	cr := Decision(nil, nil, "", 1)
+	if !strings.Contains(cr.Summary, "1 code unit evaluated") {
+		t.Errorf("summary should use the singular for one unit:\n%s", cr.Summary)
+	}
+}
+
+func TestDecisionOmitsCodeUnitLineWhenNoneWereSent(t *testing.T) {
+	cr := Decision(nil, nil, "", 0)
+	if strings.Contains(cr.Summary, "code unit") {
+		t.Errorf("summary should not mention code units when none were sent:\n%s", cr.Summary)
 	}
 }
 
