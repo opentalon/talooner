@@ -74,7 +74,14 @@ type Source interface {
 // extends the built-in per-language layer conventions that decide which
 // code.* roll-up a touched file counts toward. An empty slice means the repo
 // declared no overrides — the built-in conventions decide alone.
-func PR(ctx context.Context, src Source, owner, repo string, number int, checks config.Checks, codeowners []byte, modules []config.Module, teams config.Teams, arch []config.ArchitectureRule) (Set, error) {
+//
+// The returned []CodeUnit is every touched, classified unit (expert-review-
+// system.md, Phase 2) — the caller resolves each one's doc content from the
+// base branch and sends the result to the cluster as evaluate_pr's
+// code_units arg. PR does not fetch doc content itself: it has no base-ref
+// FileContent call to make, and every other base-branch read (ruleset,
+// modules.yaml, architecture.yaml) already happens one level up, in run.go.
+func PR(ctx context.Context, src Source, owner, repo string, number int, checks config.Checks, codeowners []byte, modules []config.Module, teams config.Teams, arch []config.ArchitectureRule) (Set, []CodeUnit, error) {
 	type prResult struct {
 		pr  *github.PullRequest
 		err error
@@ -91,7 +98,7 @@ func PR(ctx context.Context, src Source, owner, repo string, number int, checks 
 
 	stats, err := src.ChangedFileStats(ctx, owner, repo, number)
 	if err != nil {
-		return nil, fmt.Errorf("extract pr.changed_files for %s/%s#%d: %w", owner, repo, number, err)
+		return nil, nil, fmt.Errorf("extract pr.changed_files for %s/%s#%d: %w", owner, repo, number, err)
 	}
 	changed := make([]string, 0, len(stats))
 	for _, f := range stats {
@@ -100,28 +107,28 @@ func PR(ctx context.Context, src Source, owner, repo string, number int, checks 
 
 	res := <-prCh
 	if res.err != nil {
-		return nil, fmt.Errorf("extract pr.* facts for %s/%s#%d: %w", owner, repo, number, res.err)
+		return nil, nil, fmt.Errorf("extract pr.* facts for %s/%s#%d: %w", owner, repo, number, res.err)
 	}
 	pr := res.pr
 	if pr == nil {
-		return nil, fmt.Errorf("extract pr.* facts for %s/%s#%d: no pull request returned", owner, repo, number)
+		return nil, nil, fmt.Errorf("extract pr.* facts for %s/%s#%d: no pull request returned", owner, repo, number)
 	}
 
 	// checks_pending is derived from the whole round of CI on the head sha, both
 	// check runs and commit statuses — a repo can use either, or neither.
 	ci, err := src.CommitChecks(ctx, owner, repo, pr.HeadSHA)
 	if err != nil {
-		return nil, fmt.Errorf("extract pr.checks_pending for %s/%s#%d: %w", owner, repo, number, err)
+		return nil, nil, fmt.Errorf("extract pr.checks_pending for %s/%s#%d: %w", owner, repo, number, err)
 	}
 
 	diff, truncated, err := src.Diff(ctx, owner, repo, number, github.DiffMaxBytes)
 	if err != nil {
-		return nil, fmt.Errorf("extract pr.diff for %s/%s#%d: %w", owner, repo, number, err)
+		return nil, nil, fmt.Errorf("extract pr.diff for %s/%s#%d: %w", owner, repo, number, err)
 	}
 
 	reviews, err := src.PullRequestReviews(ctx, owner, repo, number)
 	if err != nil {
-		return nil, fmt.Errorf("extract review.* for %s/%s#%d: %w", owner, repo, number, err)
+		return nil, nil, fmt.Errorf("extract review.* for %s/%s#%d: %w", owner, repo, number, err)
 	}
 
 	s := New()
@@ -159,7 +166,7 @@ func PR(ctx context.Context, src Source, owner, repo string, number int, checks 
 	// extractor in this package (package comment).
 	newDeps, upgradedDeps, err := countDependencyChanges(diff, stats)
 	if err != nil {
-		return nil, fmt.Errorf("extract pr.new_dependencies / pr.upgraded_dependencies for %s/%s#%d: %w", owner, repo, number, err)
+		return nil, nil, fmt.Errorf("extract pr.new_dependencies / pr.upgraded_dependencies for %s/%s#%d: %w", owner, repo, number, err)
 	}
 	s.Int("pr.new_dependencies", newDeps)
 	s.Int("pr.upgraded_dependencies", upgradedDeps)
@@ -192,23 +199,22 @@ func PR(ctx context.Context, src Source, owner, repo string, number int, checks 
 	// already fetched here; the CODEOWNERS content is passed in rather than
 	// re-read.
 	if err := userFacts(ctx, src, s, owner, repo, pr, changed, codeowners); err != nil {
-		return nil, fmt.Errorf("extract user.owner for %s/%s#%d: %w", owner, repo, number, err)
+		return nil, nil, fmt.Errorf("extract user.owner for %s/%s#%d: %w", owner, repo, number, err)
 	}
 	// module.* facts (facts.md, "module.*"): bound to the primary touched module
 	// by most changed lines, with module.touched_count always asserted. The file
 	// stats are already in hand from the ChangedFileStats fetch above.
 	moduleFacts(s, stats, modules)
 	// code.* facts (facts.md, "code.*"): the LLM-review gate
-	// (expert-review-system.md, Phase 1). The code_unit records themselves
-	// are not returned yet — Phase 2 adds the wire field that carries them to
-	// the cluster — but the roll-up facts a ruleset gates on today are
-	// asserted here, next to module.*.
-	architectureFacts(s, stats, diff, arch)
+	// (expert-review-system.md, Phase 1), plus the code_unit records
+	// themselves — Phase 2 sends these to the cluster as evaluate_pr's
+	// code_units arg.
+	units := architectureFacts(s, stats, diff, arch)
 	// review.* facts (facts.md, "review.*"): folded from the whole review
 	// history fetched above, against the touched paths and the team lookup
 	// table already read for the require resolver.
 	reviewFacts(s, pr.HeadSHA, reviews, changed, codeowners, teams, pr.Requested.Teams, owner)
-	return s, nil
+	return s, units, nil
 }
 
 // userFacts asserts the user.* namespace (facts.md, "user.*") into s.

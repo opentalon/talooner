@@ -28,6 +28,20 @@ const (
 	ModePlan    Mode = "plan"
 )
 
+// CodeUnit is one touched, documented unit of code offered for llm_review,
+// wire-compatible with the plugin's code_units arg
+// (talooner-plugin/internal/service/units.go) — field names and JSON tags
+// must match its codeUnit struct exactly, since this is decoded there, not
+// generated from a shared proto.
+type CodeUnit struct {
+	Name          string `json:"name"`
+	Important     bool   `json:"important"`
+	DocURL        string `json:"doc_url"`
+	DocContent    string `json:"doc_content"`
+	Diff          string `json:"diff"`
+	DiffTruncated bool   `json:"diff_truncated"`
+}
+
 // EvaluateRequest is one evaluation. Repo is owner/name — the plugin scopes
 // facts by "{repo}#{pr}" and takes the two halves joined.
 type EvaluateRequest struct {
@@ -43,6 +57,13 @@ type EvaluateRequest struct {
 	// Force bypasses the llm_review fact cache for this evaluation. v1 parses
 	// --force and rejects it, so this is false until llm_review lands.
 	Force bool
+	// CodeUnits are the touched, documented units this PR changed (expert-
+	// review-system.md, Phase 2); each becomes a code_unit record cluster-side.
+	// Nil means no code_units arg at all, not an empty JSON list — a ruleset
+	// with no llm_review rules pays nothing extra either way, but a PR touching
+	// nothing under a known layer is the common case and should not send an
+	// arg for it.
+	CodeUnits []CodeUnit
 }
 
 // EvaluatePR compiles a ruleset against a PR's facts and returns the decision.
@@ -81,6 +102,13 @@ func (c *Client) EvaluatePR(ctx context.Context, req EvaluateRequest) (*talooner
 		"ruleset":  req.Ruleset,
 		"mode":     string(mode),
 		"force":    strconv.FormatBool(req.Force),
+	}
+	if len(req.CodeUnits) > 0 {
+		codeUnitsJSON, err := json.Marshal(req.CodeUnits)
+		if err != nil {
+			return nil, fmt.Errorf("encode code_units for %s#%d: %w", req.Repo, req.PR, err)
+		}
+		args["code_units"] = string(codeUnitsJSON)
 	}
 
 	var resp taloonerpb.EvaluatePrResponse

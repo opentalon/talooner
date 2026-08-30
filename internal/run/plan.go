@@ -63,18 +63,26 @@ func (r Runner) Plan(ctx context.Context, owner, repo string, prNum int, w io.Wr
 		return err
 	}
 
-	set, err := facts.PR(ctx, r.GitHub, owner, repo, prNum, cfg.Checks, codeowners, modules, teams, arch)
+	set, units, err := facts.PR(ctx, r.GitHub, owner, repo, prNum, cfg.Checks, codeowners, modules, teams, arch)
+	if err != nil {
+		return err
+	}
+	// Doc-loading warnings are not surfaced here: this is a one-shot CLI
+	// render, not a run with a check run or sticky comment to carry them, and
+	// resolveCodeUnits already logs them.
+	codeUnits, _, err := r.resolveCodeUnits(ctx, owner, repo, pr.BaseRef, units, arch)
 	if err != nil {
 		return err
 	}
 
 	resp, err := r.Cluster.EvaluatePR(ctx, cluster.EvaluateRequest{
-		Repo:    fullRepo,
-		PR:      prNum,
-		HeadSHA: pr.HeadSHA,
-		Facts:   set,
-		Ruleset: string(ruleset),
-		Mode:    cluster.ModePlan,
+		Repo:      fullRepo,
+		PR:        prNum,
+		HeadSHA:   pr.HeadSHA,
+		Facts:     set,
+		Ruleset:   string(ruleset),
+		Mode:      cluster.ModePlan,
+		CodeUnits: codeUnits,
 	})
 	if err != nil {
 		return fmt.Errorf("evaluate %s#%d: %w", fullRepo, prNum, err)

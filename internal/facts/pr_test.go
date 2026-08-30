@@ -82,7 +82,7 @@ func samplePR() *github.PullRequest {
 func TestPRAssertsEveryCoreFact(t *testing.T) {
 	src := fakeSource{pr: samplePR(), files: []string{"internal/auth/token.go", "README.md"}, diff: "@@ -1 +1 @@\n+hello", trunc: false}
 
-	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
+	got, _, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestPRHasDescription(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pr := samplePR()
 			pr.Body = tt.body
-			got, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
+			got, _, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 			if err != nil {
 				t.Fatalf("PR: %v", err)
 			}
@@ -194,7 +194,7 @@ func TestPRAssertsEmptyListsRatherThanOmittingThem(t *testing.T) {
 	pr.Labels = nil
 	pr.ChangedFiles = 0
 
-	got, err := PR(context.Background(), fakeSource{pr: pr, files: nil}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
+	got, _, err := PR(context.Background(), fakeSource{pr: pr, files: nil}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestPRForkIsCarriedThrough(t *testing.T) {
 	pr := samplePR()
 	pr.IsFork = true
 
-	got, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
+	got, _, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestPRCarriesEveryChangedFile(t *testing.T) {
 		paths[i] = fmt.Sprintf("pkg/file%03d.go", i)
 	}
 
-	got, err := PR(context.Background(), fakeSource{pr: samplePR(), files: paths}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
+	got, _, err := PR(context.Background(), fakeSource{pr: samplePR(), files: paths}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestPRReturnsNoPartialSetOnFailure(t *testing.T) {
 		{"diff fetch fails", fakeSource{pr: samplePR(), diffErr: boom}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := PR(context.Background(), tt.src, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
+			got, _, err := PR(context.Background(), tt.src, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 			if err == nil {
 				t.Fatal("err = nil, want the fetch failure")
 			}
@@ -274,7 +274,7 @@ func TestPRReturnsNoPartialSetOnFailure(t *testing.T) {
 // nil PR would be silently all-zero — every string empty, every count 0 — which
 // is the one failure mode this package exists to prevent.
 func TestPRRejectsAMissingPullRequest(t *testing.T) {
-	got, err := PR(context.Background(), fakeSource{}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
+	got, _, err := PR(context.Background(), fakeSource{}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 	if err == nil {
 		t.Fatal("err = nil, want a refusal to extract from a nil pull request")
 	}
@@ -299,7 +299,7 @@ func TestPRMergeableCarriedThrough(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pr := samplePR()
 			pr.Mergeable = tt.mergeable
-			got, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
+			got, _, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 			if err != nil {
 				t.Fatalf("PR: %v", err)
 			}
@@ -319,7 +319,7 @@ func TestPRMergeableCarriedThrough(t *testing.T) {
 func TestPRMergeableOmittedDoesNotReadAsFalse(t *testing.T) {
 	pr := samplePR()
 	pr.Mergeable = nil
-	got, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
+	got, _, err := PR(context.Background(), fakeSource{pr: pr}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -343,7 +343,7 @@ func TestPRChecksPending(t *testing.T) {
 		{"no CI at all", github.Checks{}, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := PR(context.Background(), fakeSource{pr: samplePR(), checks: tt.checks}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
+			got, _, err := PR(context.Background(), fakeSource{pr: samplePR(), checks: tt.checks}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 			if err != nil {
 				t.Fatalf("PR: %v", err)
 			}
@@ -370,7 +370,7 @@ func TestPRDiffAssertedWithTruncationFlag(t *testing.T) {
 		{"empty and complete", "", false, "", false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := PR(context.Background(), fakeSource{pr: samplePR(), diff: tt.diff, trunc: tt.trunc}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
+			got, _, err := PR(context.Background(), fakeSource{pr: samplePR(), diff: tt.diff, trunc: tt.trunc}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 			if err != nil {
 				t.Fatalf("PR: %v", err)
 			}
@@ -486,7 +486,7 @@ func TestPRDerivesPassingFacts(t *testing.T) {
 	}
 	cfg := config.Checks{Tests: []string{"test"}, Lint: []string{"lint"}}
 
-	got, err := PR(context.Background(),
+	got, _, err := PR(context.Background(),
 		fakeSource{pr: samplePR(), checks: checks}, "opentalon", "talooner", 42, cfg, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
@@ -533,7 +533,7 @@ func TestPRAssertsNewDependenciesAlways(t *testing.T) {
 		{"cargo package fields ignored", diffGitFile("Cargo.toml", "[package]\n+name = \"x\"\n+version = \"0.1.0\"\n+edition = \"2021\""), 0, 0},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := PR(context.Background(),
+			got, _, err := PR(context.Background(),
 				fakeSource{pr: samplePR(), diff: tt.diff}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 			if err != nil {
 				t.Fatalf("PR: %v", err)
@@ -565,7 +565,7 @@ func TestPRFailsOnManifestWithNoReadableDiff(t *testing.T) {
 		diff:      "@@ -1 +1 @@\n+hello",
 		fileStats: []github.FileStat{{Path: "go.mod", Additions: 5, Deletions: 2}},
 	}
-	_, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
+	_, _, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 	if err == nil {
 		t.Fatal("PR: want error for a manifest absent from the diff, got nil")
 	}
@@ -580,7 +580,7 @@ func TestPRManifestInDiffWithNoDepLinesIsZeroNotError(t *testing.T) {
 		diff:      diffGitFile("go.mod", " module example.com/x\n\n go 1.24"),
 		fileStats: []github.FileStat{{Path: "go.mod", Additions: 1, Deletions: 1}},
 	}
-	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
+	got, _, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -599,7 +599,7 @@ func TestPRManifestWithNoStatChangeIsNotUnparseable(t *testing.T) {
 		diff:      "@@ -1 +1 @@\n+hello",
 		fileStats: []github.FileStat{{Path: "go.mod", Additions: 0, Deletions: 0}},
 	}
-	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
+	got, _, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -615,7 +615,7 @@ func TestPRLeavesPassingFactsUnsetWithoutPatterns(t *testing.T) {
 	}
 	// No patterns: the gate must not fire, so the fact is omitted rather than
 	// guessed true from unmatched CI.
-	got, err := PR(context.Background(),
+	got, _, err := PR(context.Background(),
 		fakeSource{pr: samplePR(), checks: checks}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
@@ -630,7 +630,7 @@ func TestPRLeavesPassingFactsUnsetWithoutPatterns(t *testing.T) {
 
 // user.author is always asserted as pr.author, for symmetry with user.owner.
 func TestPRUserAuthorIsPRAuthor(t *testing.T) {
-	got, err := PR(context.Background(), fakeSource{pr: samplePR()}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
+	got, _, err := PR(context.Background(), fakeSource{pr: samplePR()}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -647,7 +647,7 @@ func TestPRUserOwnerFromCodeowners(t *testing.T) {
 		pr:    samplePR(),
 		files: []string{"docs/README.md", "src/app.go"},
 	}
-	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, []byte(co), nil, nil, nil)
+	got, _, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, []byte(co), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -668,7 +668,7 @@ func TestPRUserOwnerFromCodeowners(t *testing.T) {
 func TestPRUserOwnerUnsetWhenCodeownersAndLastToucherSilent(t *testing.T) {
 	const co = "/internal/secret/* @alice\n"
 	src := fakeSource{pr: samplePR(), files: []string{"README.md"}}
-	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, []byte(co), nil, nil, nil)
+	got, _, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, []byte(co), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -686,7 +686,7 @@ func TestPRUserOwnerUnsetWhenCodeownersAndLastToucherSilent(t *testing.T) {
 func TestPRUserOwnerFromLastToucherWhenCodeownersSilent(t *testing.T) {
 	const co = "/internal/secret/* @alice\n"
 	src := fakeSource{pr: samplePR(), files: []string{"billing/invoice.go"}, toucher: "carol"}
-	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, []byte(co), nil, nil, nil)
+	got, _, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, []byte(co), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -708,7 +708,7 @@ func TestPRUserOwnerFromLastToucherWhenCodeownersSilent(t *testing.T) {
 func TestPRUserOwnerCodeownersWinsOverLastToucher(t *testing.T) {
 	const co = "billing/* @alice\n"
 	src := fakeSource{pr: samplePR(), files: []string{"billing/invoice.go"}, toucher: "carol"}
-	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, []byte(co), nil, nil, nil)
+	got, _, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, []byte(co), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -724,7 +724,7 @@ func TestPRUserOwnerCodeownersWinsOverLastToucher(t *testing.T) {
 // CODEOWNERS silent on the specific path.
 func TestPRUserOwnerFromLastToucherWithNoCodeowners(t *testing.T) {
 	src := fakeSource{pr: samplePR(), files: []string{"billing/invoice.go"}, toucher: "carol"}
-	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
+	got, _, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
@@ -737,7 +737,7 @@ func TestPRUserOwnerFromLastToucherWithNoCodeowners(t *testing.T) {
 // extractor in this package — never a partial set (package comment).
 func TestPRFailsWhenLastToucherErrors(t *testing.T) {
 	src := fakeSource{pr: samplePR(), files: []string{"billing/invoice.go"}, toucherErr: errors.New("rate limited")}
-	_, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
+	_, _, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 	if err == nil {
 		t.Fatal("PR: want error, got nil")
 	}
@@ -756,7 +756,7 @@ func TestPRUserReviewerFromRequested(t *testing.T) {
 		{"none unset", &github.PullRequest{}, ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := PR(context.Background(), fakeSource{pr: tt.pr}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
+			got, _, err := PR(context.Background(), fakeSource{pr: tt.pr}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 			if err != nil {
 				t.Fatalf("PR: %v", err)
 			}
@@ -857,7 +857,7 @@ func TestPRModuleFacts(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := PR(context.Background(), fakeSource{pr: samplePR(), fileStats: tt.files},
+			got, _, err := PR(context.Background(), fakeSource{pr: samplePR(), fileStats: tt.files},
 				"opentalon", "talooner", 42, config.Checks{}, nil, tt.modules, nil, nil)
 			if err != nil {
 				t.Fatalf("PR: %v", err)

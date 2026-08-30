@@ -93,6 +93,83 @@ func TestEvaluatePRArgs(t *testing.T) {
 	}
 }
 
+// The code_units arg is wire-compatible with talooner-plugin's own codeUnit
+// struct (internal/service/units.go) — not generated from a shared proto, so
+// a field rename on either side is a silent break the plugin only reports as
+// "invalid code_units" at runtime. This test is what would catch it here.
+func TestEvaluatePRCodeUnitsArg(t *testing.T) {
+	f := scripted(t, map[string]func(*pluginpb.ToolCallRequest) *pluginpb.ToolResultResponse{
+		ActionEvaluatePR: structured(t, &taloonerpb.EvaluatePrResponse{}),
+	})
+	c, err := dialFake(t, f)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+
+	_, err = c.EvaluatePR(t.Context(), EvaluateRequest{
+		Repo:    "opentalon/talooner",
+		PR:      42,
+		HeadSHA: "abc123",
+		Facts:   map[string]any{"pr.number": 42},
+		Ruleset: "rule \"x\" { }",
+		CodeUnits: []CodeUnit{
+			{Name: "internal/auth", Important: true, DocURL: "docs/services/auth.md",
+				DocContent: "auth must hash passwords", Diff: "- plaintext\n+ bcrypt", DiffTruncated: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("EvaluatePR: %v", err)
+	}
+
+	args := callFor(t, f, ActionEvaluatePR).GetArgs()
+	var got []map[string]any
+	if err := json.Unmarshal([]byte(args["code_units"]), &got); err != nil {
+		t.Fatalf("code_units arg is not JSON: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("code_units = %v, want one unit", got)
+	}
+	want := map[string]any{
+		"name": "internal/auth", "important": true, "doc_url": "docs/services/auth.md",
+		"doc_content": "auth must hash passwords", "diff": "- plaintext\n+ bcrypt", "diff_truncated": true,
+	}
+	for k, v := range want {
+		if got[0][k] != v {
+			t.Errorf("code_units[0][%q] = %v, want %v", k, got[0][k], v)
+		}
+	}
+}
+
+// No code units at all — most PRs touch nothing under a known layer — must
+// not send a code_units arg, not an empty JSON list: units.go's parser treats
+// the arg's absence and an empty string the same, but sending anything at all
+// for the overwhelmingly common case is one string the plugin never needed.
+func TestEvaluatePROmitsCodeUnitsWhenEmpty(t *testing.T) {
+	f := scripted(t, map[string]func(*pluginpb.ToolCallRequest) *pluginpb.ToolResultResponse{
+		ActionEvaluatePR: structured(t, &taloonerpb.EvaluatePrResponse{}),
+	})
+	c, err := dialFake(t, f)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+
+	_, err = c.EvaluatePR(t.Context(), EvaluateRequest{
+		Repo:    "opentalon/talooner",
+		PR:      42,
+		HeadSHA: "abc123",
+		Facts:   map[string]any{"pr.number": 42},
+		Ruleset: "rule \"x\" { }",
+	})
+	if err != nil {
+		t.Fatalf("EvaluatePR: %v", err)
+	}
+
+	args := callFor(t, f, ActionEvaluatePR).GetArgs()
+	if _, ok := args["code_units"]; ok {
+		t.Errorf("code_units arg present = %q, want absent", args["code_units"])
+	}
+}
+
 func TestEvaluatePRRejectsAnEmptyFactSet(t *testing.T) {
 	f := scripted(t, nil)
 	c, err := dialFake(t, f)

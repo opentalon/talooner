@@ -185,7 +185,7 @@ func TestPRArchitectureDiffSlicePerUnit(t *testing.T) {
 // visible on the Set the public extractor returns, not just internally.
 func TestPRWiresArchitectureFacts(t *testing.T) {
 	src := fakeSource{pr: samplePR(), files: []string{"app/models/user.rb"}}
-	got, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
+	got, _, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
 	}
