@@ -6,7 +6,7 @@ request, asserted by the bot and read by the engine.
 This file is the **extraction** side: what the bot produces and where each fact
 comes from. What happens to those facts once they reach the cluster — scoping,
 lifetime, namespace enforcement, retention — is
-[`talooner-plugin/facts.md`](https://github.com/opentalon/talooner-plugin/blob/main/facts.md).
+[`talooner-plugin/docs/facts.md`](https://github.com/opentalon/talooner-plugin/blob/main/docs/facts.md).
 
 ## Where configuration lives
 
@@ -681,7 +681,7 @@ document originally assumed.
 `tln-language`'s evaluator is **two-valued**, with closed-world
 negation-as-failure. There is no `unknown`. A missing attribute makes its pattern
 fail, which makes any enclosing `not` *succeed*. Verified against both backends —
-see `talooner-plugin/OPEN-QUESTIONS.md` A1 for the probe and the code
+see `talooner-plugin/docs/OPEN-QUESTIONS.md` A1 for the probe and the code
 references.
 
 The consequence splits by condition shape, and the split is what to remember:
@@ -711,14 +711,14 @@ responsibility:
   crashed" to "approved", and nothing in the review output will say so.
 
 The guard that closes this — a `strict` rule on a `pr.facts_complete` flag — is
-written out in `talooner-plugin/OPEN-QUESTIONS.md` A1. It was deliberately not
+written out in `talooner-plugin/docs/OPEN-QUESTIONS.md` A1. It was deliberately not
 built for v1; nothing forecloses adding it.
 
 ## Retention
 
 Facts outlive a single run and are the plugin's to expire — defaults and how
 they're enforced are in
-[`talooner-plugin/facts.md`](https://github.com/opentalon/talooner-plugin/blob/main/facts.md),
+[`talooner-plugin/docs/facts.md`](https://github.com/opentalon/talooner-plugin/blob/main/docs/facts.md),
 "Scoping and lifetime". The GitHub half keeps nothing — it is a container that
 exits.
 

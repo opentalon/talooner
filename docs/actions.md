@@ -31,7 +31,7 @@ looks a fact up.
 **tln does not validate verb names** — the vocabulary belongs to the host. A
 misspelled `do aprove "pr"` parses cleanly and would otherwise vanish, so
 `validate_ruleset` rejects anything outside this table
-(`talooner-plugin/engine.md`, "The verb list is ours to enforce"). The bot
+(`talooner-plugin/docs/engine.md`, "The verb list is ours to enforce"). The bot
 enforces it again at execution: an action whose verb has no executor is a hard
 error, never a no-op.
 
@@ -127,7 +127,7 @@ re-evaluates from scratch on every event rather than applying deltas.
 machinery inside the plugin, not by an ad-hoc "block wins" in the bot —
 `strict` > `overrides` > priority, plus a `strict` base ruleset Talooner always
 loads. Full rules in
-[`talooner-plugin/engine.md`](https://github.com/opentalon/talooner-plugin/blob/main/engine.md),
+[`talooner-plugin/docs/engine.md`](https://github.com/opentalon/talooner-plugin/blob/main/docs/engine.md),
 "Conflict resolution".
 
 What lands on the bot: an unresolved tie returns **both** actions plus a warning.

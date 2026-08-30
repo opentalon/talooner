@@ -1,14 +1,17 @@
 # Talooner — architecture
 
-> **`llm_review` described below is unimplemented.** This document's request
-> flow, determinism section, and `module.*` framing describe the PR-level
-> design as originally planned and as the code is structured today (no
-> `llm_review` executor, no `code_unit`, no per-unit cache exists in this
-> repo or `talooner-plugin`). The design actually being built is per-unit,
-> not per-PR — see [`expert-review-system.md`](expert-review-system.md) for
-> the current specification and decisions. Sections below are corrected
-> against the current code where they'd drifted independent of that change;
-> where `llm_review` specifics appear, read them as historical intent.
+> **`llm_review` described below is stale, and not reachable end-to-end.** This
+> document's request flow, determinism section, and `module.*` framing describe
+> the original PR-level design. What actually exists: `talooner-plugin` has a
+> real `llm_review` executor and per-unit cache since 2026-08-28
+> (`talooner-plugin/docs/llm-review.md`), and this repo has a `code_unit` fact
+> layer since 2026-08-29 (Phase 1 below) — but that layer only produces its own
+> `code.*` gating facts, and doesn't yet send `code_units` on `evaluate_pr` (#78).
+> So no real PR reaches a model through this path yet. The design is per-unit,
+> not per-PR — see [`expert-review-system.md`](expert-review-system.md) for the
+> current specification and decisions. Sections below are corrected against the
+> current code where they'd drifted independent of that change; where
+> `llm_review` specifics appear, read them as historical intent.
 
 ## What it is
 
@@ -204,7 +207,7 @@ checkout.
 
 The plugin does link both, and therefore inherits the workspace's `replace`
 convention. See
-[`talooner-plugin/deployment.md`](https://github.com/opentalon/talooner-plugin/blob/main/deployment.md),
+[`talooner-plugin/docs/deployment.md`](https://github.com/opentalon/talooner-plugin/blob/main/docs/deployment.md),
 "Dependency chain" — read it before the first build over there.
 
 ## Invocation — explicit in v1
@@ -325,7 +328,7 @@ runner starts with {repo, pr, event, GITHUB_TOKEN}
   2. extract facts (see facts.md)
   3. plugin action "evaluate_pr" {repo, pr, head_sha, facts JSON, ruleset, mode}
      (an OpenTalon plugin action, not a bespoke rpc —
-      see talooner-plugin/protocol.md)
+      see talooner-plugin/docs/protocol.md)
        └─ plugin: assert facts into tln-db, run engine,
                   resolve conflicts (defeasible), issue llm_review as needed,
                   return actions + explanation
@@ -360,7 +363,7 @@ enforces the same thing from its side: a second `evaluate_pr` for a `(repo, pr)`
 already in flight is rejected with a 409 rather than queued. It has to be — fact
 assertion is a non-atomic read-modify-write, so two overlapping runs would
 interleave into a mixed fact set rather than the later one simply winning
-(`talooner-plugin/OPEN-QUESTIONS.md` A7, B6).
+(`talooner-plugin/docs/OPEN-QUESTIONS.md` A7, B6).
 
 Actions remain idempotent by construction: comments are sticky (edited in place,
 keyed by a marker), check runs are updated by name, reviews are dismissed and

@@ -34,7 +34,7 @@ Two notation decisions worth knowing before someone "fixes" them:
 |---|---|---|
 | 0 | System context (C4 L1) | Who uses it, what it touches, who pays |
 | 1 | Containers (C4 L2) | What runs where inside the boundary |
-| 2a | Components (C4 L3) | The bot's internals; the plugin's are in `talooner-plugin/diagrams.md` §2 |
+| 2a | Components (C4 L3) | The bot's internals; the plugin's are in `talooner-plugin/docs/diagrams.md` §2 |
 | 3 | `@talooner /review` flow | The v1 happy path, end to end |
 | 4 | Re-evaluation on push | Reactive rules, and retraction |
 | 5 | `llm_review` | Why there's no cache layer, and where determinism comes from |
@@ -186,7 +186,7 @@ the workflow's `concurrency:` block; auth is a token the runner is handed.
 ### 2b. `talooner-plugin` — knows tln, knows nothing about GitHub
 
 Lives in the other repo:
-[`talooner-plugin/diagrams.md`](https://github.com/opentalon/talooner-plugin/blob/main/diagrams.md)
+[`talooner-plugin/docs/diagrams.md`](https://github.com/opentalon/talooner-plugin/blob/main/docs/diagrams.md)
 §2. Ruleset loader → engine → `llm_review` → defeasible resolution → `explain`,
 all over `tln-db`.
 
