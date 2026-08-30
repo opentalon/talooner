@@ -47,6 +47,34 @@ func TestReviewDoesNotAbbreviateFindingText(t *testing.T) {
 	}
 }
 
+// A `for records where type == "code_unit" and ... do comment ...` rule fires
+// once per drifted unit, so N drifted units arrive here as N separate
+// VerbComment actions, one per unit's own {attr.path}: {attr.llm_review.explanation}
+// text. This is the generic aggregation TestReviewCarriesEveryFinding already
+// covers with arbitrary text — pinned here with the code_unit drift shape
+// specifically (expert-review-system.md, Phase 3) so nobody re-adds
+// code_unit-specific aggregation code believing this doesn't already work.
+func TestReviewFoldsMultipleCodeUnitDriftFindingsIntoOneComment(t *testing.T) {
+	body := Review([]action.Action{
+		{Verb: action.VerbComment, Target: "pr", Text: "internal/auth/token.go: the doc says tokens expire after 1h, the diff sets 24h"},
+		{Verb: action.VerbComment, Target: "pr", Text: "internal/billing/invoice.go: the doc says invoices are immutable once sent, the diff adds an Update method"},
+		{Verb: action.VerbComment, Target: "pr", Text: "internal/auth/session.go: the doc says sessions are single-use, the diff removes the consumed check"},
+	}, nil, "3 rules fired", "abc123")
+
+	if n := strings.Count(body, "### Talooner review"); n != 1 {
+		t.Errorf("body should be one review section, got %d", n)
+	}
+	for _, want := range []string{
+		"internal/auth/token.go", "24h",
+		"internal/billing/invoice.go", "Update method",
+		"internal/auth/session.go", "consumed check",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body is missing drift finding %q:\n%s", want, body)
+		}
+	}
+}
+
 func TestReviewRendersWarnings(t *testing.T) {
 	body := Review(nil, []check.Warning{
 		{Code: "unresolved_conflict", Message: "approve and block both fired"},

@@ -52,8 +52,17 @@ type Diagnostic struct {
 
 // Decision renders the check run for an evaluation that completed. actions is
 // the decoded action set, warnings what the plugin surfaced alongside it, and
-// summary the explain summary, which may be empty.
-func Decision(actions []action.Action, warnings []Warning, summary string) github.CheckRun {
+// summary the explain summary, which may be empty. unitCount is how many
+// code_unit records the run sent for llm_review (0 if the repo has not opted
+// into expert-review-system.md's architecture.yaml, or none touched an
+// important unit).
+//
+// It reports only how many units were evaluated, not how many drifted: an
+// Action carries no rule or code_unit identity on the wire
+// (talooner-plugin/proto/talooner/v1/talooner.proto's Action message), so the
+// bot cannot attribute a comment or block action back to the drift rule
+// versus any other rule in the same ruleset that also comments or blocks.
+func Decision(actions []action.Action, warnings []Warning, summary string, unitCount int) github.CheckRun {
 	var blocked, approved bool
 	for _, a := range actions {
 		switch a.Verb {
@@ -103,6 +112,13 @@ func Decision(actions []action.Action, warnings []Warning, summary string) githu
 	if blocked && approved {
 		b.WriteString("\nBoth `approve` and `block` fired and the ruleset does not say which wins. " +
 			"The check is reported as a failure until the tie is resolved with `overrides` or `priority`.\n")
+	}
+	if unitCount > 0 {
+		unit := "code units"
+		if unitCount == 1 {
+			unit = "code unit"
+		}
+		fmt.Fprintf(&b, "\n%d %s evaluated for documented-behavior drift.\n", unitCount, unit)
 	}
 	writeWarnings(&b, warnings)
 

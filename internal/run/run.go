@@ -307,7 +307,7 @@ func (r Runner) evaluate(ctx context.Context, repo string, pr *github.PullReques
 		}
 	}
 
-	return r.report(ctx, repo, pr, resp, actions, teams, docWarnings)
+	return r.report(ctx, repo, pr, resp, actions, teams, docWarnings, len(codeUnits))
 }
 
 // plan evaluates a fork PR's own head-branch ruleset in plan mode — no writes
@@ -589,7 +589,12 @@ func (r Runner) gate(ctx context.Context) (*command.Command, error) {
 // folded in alongside the plugin's own warnings so both surface in the same
 // check run and sticky comment, rather than only one of the two halves of the
 // run.
-func (r Runner) report(ctx context.Context, repo string, pr *github.PullRequest, resp *taloonerpb.EvaluatePrResponse, actions []action.Action, teams config.Teams, docWarnings []check.Warning) error {
+//
+// unitCount is len(codeUnits) as resolved by the caller — how many code_unit
+// records were sent for llm_review, so the check run can say how many units
+// were in scope. It cannot say how many drifted (check.Decision's doc comment
+// has why).
+func (r Runner) report(ctx context.Context, repo string, pr *github.PullRequest, resp *taloonerpb.EvaluatePrResponse, actions []action.Action, teams config.Teams, docWarnings []check.Warning, unitCount int) error {
 	warnings := make([]check.Warning, 0, len(resp.GetWarnings())+len(docWarnings))
 	warnings = append(warnings, docWarnings...)
 	for _, w := range resp.GetWarnings() {
@@ -665,7 +670,7 @@ func (r Runner) report(ctx context.Context, repo string, pr *github.PullRequest,
 	// review comment is the same shape of thing — `do comment` firing three
 	// times is one comment with three findings, not three comments. It goes
 	// last, as the run's "everything worked" marker.
-	cr := check.Decision(actions, warnings, summary)
+	cr := check.Decision(actions, warnings, summary, unitCount)
 	cr.HeadSHA = pr.HeadSHA
 	if _, err := r.GitHub.UpsertCheckRun(ctx, r.Event.Owner, r.Event.Repo, cr); err != nil {
 		return fmt.Errorf("write the check run for %s#%d: %w", repo, r.Event.PR, err)
