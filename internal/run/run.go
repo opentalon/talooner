@@ -251,9 +251,19 @@ func (r Runner) evaluate(ctx context.Context, repo string, pr *github.PullReques
 		return r.configBroken(ctx, repo, pr, err)
 	}
 
-	set, err := facts.PR(ctx, r.GitHub, ev.Owner, ev.Repo, ev.PR, cfg.Checks, codeowners, modules, teams, arch)
+	set, units, err := facts.PR(ctx, r.GitHub, ev.Owner, ev.Repo, ev.PR, cfg.Checks, codeowners, modules, teams, arch)
 	if err != nil {
 		return err // already names the repo and PR, and is never partial
+	}
+	// code_units feeds llm_review (expert-review-system.md, Phase 2): each
+	// touched, documented unit's doc, read from the base branch like every
+	// other tenant config so a fork PR cannot rewrite what it is judged
+	// against. A doc-loading problem warns rather than failing the run — the
+	// LLM-review gate is additive, never a reason to withhold the rest of the
+	// verdict.
+	codeUnits, docWarnings, err := r.resolveCodeUnits(ctx, ev.Owner, ev.Repo, pr.BaseRef, units, arch)
+	if err != nil {
+		return fmt.Errorf("load code unit docs for %s#%d: %w", repo, ev.PR, err)
 	}
 
 	resp, err := r.Cluster.EvaluatePR(ctx, cluster.EvaluateRequest{
@@ -264,7 +274,8 @@ func (r Runner) evaluate(ctx context.Context, repo string, pr *github.PullReques
 		Ruleset: string(ruleset),
 		// Execute mode: the ruleset came from the base branch, so it is the
 		// maintainers'.
-		Mode: cluster.ModeExecute,
+		Mode:      cluster.ModeExecute,
+		CodeUnits: codeUnits,
 	})
 	if err != nil {
 		evalErr := fmt.Errorf("evaluate %s#%d: %w", repo, ev.PR, err)
@@ -288,13 +299,15 @@ func (r Runner) evaluate(ctx context.Context, repo string, pr *github.PullReques
 	// separately, in plan mode, so a contributor sees their rule change's effect
 	// without being able to act on it (architecture.md, "Fork safety"). Best
 	// effort — it must never turn a working base evaluation into a broken run.
+	// codeUnits is already resolved above, so the plan call costs no extra API
+	// requests to include it.
 	if pr.IsFork {
-		if err := r.plan(ctx, repo, pr, set, actions); err != nil {
+		if err := r.plan(ctx, repo, pr, set, codeUnits, actions); err != nil {
 			r.Log.Warn("fork plan comparison did not complete", "repo", repo, "pr", ev.PR, "err", err)
 		}
 	}
 
-	return r.report(ctx, repo, pr, resp, actions, teams)
+	return r.report(ctx, repo, pr, resp, actions, teams, docWarnings)
 }
 
 // plan evaluates a fork PR's own head-branch ruleset in plan mode — no writes
@@ -307,7 +320,7 @@ func (r Runner) evaluate(ctx context.Context, repo string, pr *github.PullReques
 // A repo with no ruleset of its own on the head branch is not a fork carrying
 // anything to compare, so the comment (if any earlier run left one) is
 // resolved rather than left describing a diff that no longer applies.
-func (r Runner) plan(ctx context.Context, repo string, pr *github.PullRequest, set facts.Set, base []action.Action) error {
+func (r Runner) plan(ctx context.Context, repo string, pr *github.PullRequest, set facts.Set, codeUnits []cluster.CodeUnit, base []action.Action) error {
 	ev := r.Event
 
 	headRuleset, err := r.GitHub.FileContent(ctx, ev.Owner, ev.Repo, RulesetPath, pr.HeadSHA)
@@ -322,12 +335,13 @@ func (r Runner) plan(ctx context.Context, repo string, pr *github.PullRequest, s
 	}
 
 	resp, err := r.Cluster.EvaluatePR(ctx, cluster.EvaluateRequest{
-		Repo:    repo,
-		PR:      ev.PR,
-		HeadSHA: pr.HeadSHA,
-		Facts:   set,
-		Ruleset: string(headRuleset),
-		Mode:    cluster.ModePlan,
+		Repo:      repo,
+		PR:        ev.PR,
+		HeadSHA:   pr.HeadSHA,
+		Facts:     set,
+		Ruleset:   string(headRuleset),
+		Mode:      cluster.ModePlan,
+		CodeUnits: codeUnits,
 	})
 	if err != nil {
 		return fmt.Errorf("evaluate head ruleset for %s#%d: %w", repo, ev.PR, err)
@@ -454,6 +468,79 @@ func (r Runner) loadArchitecture(ctx context.Context, owner, repo, ref string) (
 	return arch, nil
 }
 
+// resolveCodeUnits turns facts.PR's touched-unit records into the wire shape
+// evaluate_pr sends as code_units (expert-review-system.md, Phase 2;
+// talooner-plugin/docs/llm-review.md): each unit's governing doc, read from
+// the base branch so a fork PR cannot rewrite what it is judged against.
+//
+// Gated on the repo having its own .github/talooner/architecture.yaml
+// (arch non-empty): the built-in per-language layer table alone (Go's
+// internal/<pkg>, Rails' app/models etc.) matches almost every changed file
+// in almost every repo, onboarded for llm_review or not. Resolving docs and
+// warning on every convention-derived unit with no doc would mean a doc-
+// loading API call and a "doc not found" warning on every single run of every
+// onboarded repo that has not written per-service docs — not a cost or a
+// noise level a repo merely running Talooner for its other rules signed up
+// for. Writing architecture.yaml, even a one-line rule, is the opt-in signal.
+//
+// A unit with no doc_ref (an architecture.yaml override that named none) is
+// dropped silently — that is a declared "no doc to review against", not a
+// problem (facts.md, "architecture.yaml: override or extend the built-in
+// layers"). A unit whose doc_ref fails to load — missing on the base branch,
+// or (github.FileContent's own cap) over 1 MiB, GitHub's own inline-content
+// limit — is also dropped, but warns rather than failing the run: llm_review
+// is additive, never a reason to withhold the rest of the verdict. Every doc
+// is fetched at most once per run, keyed by doc_ref, since several units can
+// share one doc, and a failure warns once per doc_ref, not once per unit.
+//
+// This never actually returns a non-nil error today — every FileContent
+// failure degrades to a warning instead — but it keeps the same (result,
+// warnings, error) shape as its caller's other loadX methods rather than
+// being the one exception.
+func (r Runner) resolveCodeUnits(ctx context.Context, owner, repo, baseRef string, units []facts.CodeUnit, arch []config.ArchitectureRule) ([]cluster.CodeUnit, []check.Warning, error) {
+	if len(arch) == 0 {
+		return nil, nil, nil
+	}
+	type doc struct {
+		content []byte
+		err     error
+	}
+	docs := make(map[string]doc, len(units))
+	var warnings []check.Warning
+	result := make([]cluster.CodeUnit, 0, len(units))
+
+	for _, u := range units {
+		if u.DocRef == "" {
+			continue
+		}
+		d, cached := docs[u.DocRef]
+		if !cached {
+			content, err := r.GitHub.FileContent(ctx, owner, repo, u.DocRef, baseRef)
+			d = doc{content: content, err: err}
+			docs[u.DocRef] = d
+			if err != nil {
+				r.Log.Warn("code unit's doc could not be loaded, unit not reviewed",
+					"repo", owner+"/"+repo, "unit", u.Path, "doc_ref", u.DocRef, "ref", baseRef, "err", err)
+				warnings = append(warnings, check.Warning{
+					Code:    "code_unit_doc_unavailable",
+					Message: fmt.Sprintf("%s: doc %s not reviewed: %s", u.Path, u.DocRef, err),
+				})
+			}
+		}
+		if d.err != nil {
+			continue
+		}
+		result = append(result, cluster.CodeUnit{
+			Name:       u.Path,
+			Important:  u.Important,
+			DocURL:     u.DocRef,
+			DocContent: string(d.content),
+			Diff:       u.DiffSlice,
+		})
+	}
+	return result, warnings, nil
+}
+
 // gate parses the command in a comment and checks the commander's access. It
 // returns (nil, nil) when there is nothing to do — the caller exits 0 without
 // saying anything, which is the whole point: a reply to an unauthorised account
@@ -497,8 +584,14 @@ func (r Runner) gate(ctx context.Context) (*command.Command, error) {
 // actions is already decoded by the caller — a verdict carrying a verb this
 // build has never heard of fails the run before report is ever called, rather
 // than after this has written a check run describing half of it.
-func (r Runner) report(ctx context.Context, repo string, pr *github.PullRequest, resp *taloonerpb.EvaluatePrResponse, actions []action.Action, teams config.Teams) error {
-	warnings := make([]check.Warning, 0, len(resp.GetWarnings()))
+//
+// docWarnings are bot-side code_unit doc-loading problems (resolveCodeUnits) —
+// folded in alongside the plugin's own warnings so both surface in the same
+// check run and sticky comment, rather than only one of the two halves of the
+// run.
+func (r Runner) report(ctx context.Context, repo string, pr *github.PullRequest, resp *taloonerpb.EvaluatePrResponse, actions []action.Action, teams config.Teams, docWarnings []check.Warning) error {
+	warnings := make([]check.Warning, 0, len(resp.GetWarnings())+len(docWarnings))
+	warnings = append(warnings, docWarnings...)
 	for _, w := range resp.GetWarnings() {
 		r.Log.Warn("plugin warning", "code", w.GetCode(), "message", w.GetMessage())
 		warnings = append(warnings, check.Warning{Code: w.GetCode(), Message: w.GetMessage()})
@@ -677,18 +770,25 @@ func (r Runner) planReply(ctx context.Context, repo string, pr *github.PullReque
 		return fmt.Errorf("load head ruleset for %s#%d: %w", repo, ev.PR, err)
 	}
 
-	set, err := facts.PR(ctx, r.GitHub, ev.Owner, ev.Repo, ev.PR, cfg.Checks, codeowners, modules, teams, arch)
+	set, units, err := facts.PR(ctx, r.GitHub, ev.Owner, ev.Repo, ev.PR, cfg.Checks, codeowners, modules, teams, arch)
 	if err != nil {
 		return err // already names the repo and PR, and is never partial
 	}
+	// Warnings from a bad doc are not surfaced here: /plan writes one informal
+	// comment, not a check run, and resolveCodeUnits already logs them.
+	codeUnits, _, err := r.resolveCodeUnits(ctx, ev.Owner, ev.Repo, pr.BaseRef, units, arch)
+	if err != nil {
+		return fmt.Errorf("load code unit docs for %s#%d: %w", repo, ev.PR, err)
+	}
 
 	resp, err := r.Cluster.EvaluatePR(ctx, cluster.EvaluateRequest{
-		Repo:    repo,
-		PR:      ev.PR,
-		HeadSHA: pr.HeadSHA,
-		Facts:   set,
-		Ruleset: string(ruleset),
-		Mode:    cluster.ModePlan,
+		Repo:      repo,
+		PR:        ev.PR,
+		HeadSHA:   pr.HeadSHA,
+		Facts:     set,
+		Ruleset:   string(ruleset),
+		Mode:      cluster.ModePlan,
+		CodeUnits: codeUnits,
 	})
 	if err != nil {
 		if !errors.Is(err, cluster.ErrAction) {

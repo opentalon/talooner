@@ -552,14 +552,41 @@ team's slug.
 
 ## `code.*` — the LLM-review gate
 
-**Phase 1 of [`expert-review-system.md`](expert-review-system.md), shipped.**
-`architectureFacts` (`internal/facts/architecture.go`) classifies every changed
-file into a `code_unit` — a touched model, controller, or service — and rolls
-the result up into PR-level facts a ruleset can gate on cheaply, before any
-LLM spend. The per-unit records themselves (`kind`, `path`, `important`,
-`doc_ref`, `diff_slice`) are not sent to the cluster yet: Phase 2 adds the
-proto field that carries them (`expert-review-system.md`, "Phase 2"). Today
-`code.*` is the gate half only.
+**Phase 1 and Phase 2 of [`expert-review-system.md`](expert-review-system.md),
+both shipped.** `architectureFacts` (`internal/facts/architecture.go`)
+classifies every changed file into a `code_unit` — a touched model,
+controller, or service — and rolls the result up into PR-level facts a
+ruleset can gate on cheaply, before any LLM spend.
+
+The per-unit records themselves (`kind`, `path`, `important`, `doc_ref`,
+`diff_slice`) are sent to the cluster as `evaluate_pr`'s `code_units` arg —
+`internal/run/run.go`'s `resolveCodeUnits`, a JSON array of `{name, important,
+doc_url, doc_content, diff}`, matching `talooner-plugin/internal/service/
+units.go`'s `codeUnit` exactly (there is no shared proto field for this; it is
+a JSON string arg, the same shape as `facts`). `doc_content` is read from the
+**base branch**, per unit's `doc_ref`, so a fork PR cannot rewrite the doc it
+is judged against.
+
+**Gated on the repo having its own `.github/talooner/architecture.yaml`** —
+not on any rule actually using `llm_review`. The built-in per-language layer
+table alone matches almost every changed file in almost every repo (Go's
+`internal/<pkg>/`, Rails' `app/models/` and friends), so resolving docs
+unconditionally would mean an extra GitHub read and a warning on every run of
+every onboarded repo that never touched `architecture.yaml`, whether or not
+it wants `llm_review`. Writing `architecture.yaml` — even a one-line rule
+naming a path this PR does not touch — is the opt-in signal; with none, no
+code_unit's doc is fetched and `code_units` is omitted from the request
+entirely.
+
+A unit whose `doc_ref` fails to load — missing on the base branch, or over
+GitHub's 1 MiB inline-content limit — is dropped from `code_units` (nothing
+to review it against) and produces a `code_unit_doc_unavailable` warning
+(surfaced in the check run and sticky comment) rather than failing the run:
+`llm_review` is additive, never a reason to withhold the rest of the verdict.
+A unit with no `doc_ref` at all (an `architecture.yaml` override that
+declared one, deliberately empty) is dropped silently — that is an answer,
+not a problem. Each `doc_ref` is fetched at most once per run and warns at
+most once, even when several units share it.
 
 | Fact | Type | When asserted |
 |---|---|---|

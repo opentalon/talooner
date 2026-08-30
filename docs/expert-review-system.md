@@ -162,9 +162,10 @@ self-approve a merge, and it never appears directly as an action.
    tln rules — replacing any two-pass ad hoc loop with plain rule evaluation. The
    enrich guard (`important == true`) is the token-economy gate; per-unit diff slicing
    cuts tokens further.
-6. Doc source is a per-repo file, loaded by the bot (which holds the GitHub token) and
-   shipped to the cluster in a `docs[]` request field — this is what reconciles
-   per-repo docs with fork-safety.
+6. Doc source is a per-repo file, loaded by the bot (which holds the GitHub token) from
+   the base branch and shipped to the cluster inline on each unit (`code_units`'
+   `doc_content`, not a separate `docs[]` field — see Phase 2, shipped) — this is what
+   reconciles per-repo docs with fork-safety.
 7. Architecture/layer knowledge is conventions + YAML override today. The extraction
    function takes the layer map as an argument, leaving a seam for a DB-backed,
    per-language knowledge base later with no change to callers or fact names.
@@ -223,22 +224,33 @@ extractor pattern.
 
 ### Phase 2 — talooner: per-unit doc loading + evaluate contract
 
+> **Shipped (`talooner#83`).** Reconciled against what `talooner-plugin#54` actually
+> built (`talooner-plugin/docs/llm-review.md`) rather than the plan below: there is no
+> shared proto field, no separate `docs[]` field, and no unconditional doc loading.
+> `resolveCodeUnits` (`internal/run/run.go`) is gated on the repo having its own
+> `.github/talooner/architecture.yaml` — see `facts.md`, "`code.*` — the LLM-review
+> gate" for why. Kept below for the design rationale that is still accurate: the doc
+> set, the base-branch read, and the skip-with-warning behavior for a doc that fails
+> to load.
+
 - Doc set = each touched unit's `doc_ref` (from Phase 1), deduplicated. No ruleset
-  scanning needed — the docs to load are exactly the resolved `doc_refs`. Done in
-  `internal/run/run.go` after fact extraction (`run.go:235`).
+  scanning needed — the docs to load are exactly the resolved `doc_refs`.
 - Load content from base branch: for each `doc_ref`,
   `r.GitHub.FileContent(ctx, owner, repo, path, pr.BaseRef)` — same call already used
-  for `rules.tln` (`run.go:192`). Skip-with-warning on a missing doc (surfaced as a
-  talooner warning, not a crash); a unit with no doc simply isn't reviewed. Per-doc
-  size cap consistent with the 1 MB diff cap.
-- New wire fields: `repeated CodeUnit units` (kind, path, important, doc_ref,
-  diff_slice) and `repeated DocFile docs` (path + content) on `EvaluatePrRequest`
-  (`talooner-plugin/proto/talooner/v1/talooner.proto:136-151`), following the
-  existing `repeated TouchedModule modules` precedent. Regenerate protos in both
-  repos. Extend `cluster.EvaluateRequest` (`internal/cluster/evaluate.go:44`) and
-  marshal at the call site (`evaluate.go:53-98`), populated from `run.go:240-259`.
-  Plugin-side, assert each `CodeUnit` as a `type == "code_unit"` record in the PR
-  scope.
+  for `rules.tln`. Skip-with-warning (`code_unit_doc_unavailable`) on a doc that fails
+  to load — missing, or over GitHub's own 1 MiB inline-content cap — rather than
+  failing the run; a unit with no doc simply isn't reviewed. Each `doc_ref` is fetched,
+  and warned on, at most once per run, even when several units share it.
+- Wire shape: a single `code_units` JSON string arg on `evaluate_pr`, decoded
+  plugin-side by `talooner-plugin/internal/service/units.go`'s `codeUnit` — `{name,
+  important, doc_url, doc_content, diff}` per unit, `doc_content` inline, not a
+  separate `docs[]`/proto field. `cluster.CodeUnit` (`internal/cluster/evaluate.go`)
+  is the wire-compatible Go type; `cluster.EvaluateRequest.CodeUnits` carries it,
+  marshalled in `EvaluatePR` alongside the existing `facts` arg. Plugin-side, each
+  becomes a `type == "code_unit"` record in the PR scope, asserting `unit.*` facts
+  (`unit.name`, `unit.important`, `unit.doc_url`, `unit.doc_content`, `unit.diff`) —
+  not `llm_review.*` as Phase 4's design rationale originally assumed; see that
+  section's shipped note.
 
 ### Phase 3 — talooner: the report
 
@@ -284,10 +296,12 @@ rule "Block on any documented-behavior drift" {
 > `<llm-plugin>` review action; and no VCR cassettes yet — tests use a fake
 > `HostCaller`. Current design: `talooner-plugin/docs/llm-review.md`.
 >
-> **Not reachable end-to-end yet.** The plugin can execute `llm_review` given
-> `code_units`, but this repo's Phase 1 (below) only produces `code.*` gating
-> facts for its own ruleset — it doesn't send `code_units` on `evaluate_pr` yet.
-> That wiring is `#78`.
+> **Reachable end-to-end as of Phase 2 (`talooner#83`)**, for a repo that has opted
+> in with its own `architecture.yaml` — see Phase 2's shipped note and `facts.md`,
+> "`code.*` — the LLM-review gate" for why that opt-in exists. A repo relying on the
+> built-in layer conventions alone, with no `architecture.yaml` at all, does not yet
+> get `code_units` sent; writing the file (even a one-line rule for something else)
+> is what turns it on.
 
 Adopt the proven tln-plugin bridge instead of reimplementing an LLM client. The
 review is a tln tool call serviced by a host-backed `ToolResolver`; the plugin holds
@@ -369,8 +383,11 @@ LLM-review example to `tln-language/docs/actions.md`.
 
 - Phase 1: `go test ./internal/facts/...` — new fixtures assert every `code.*` fact for
   Rails and Go, including negative cases.
-- Contract: proto round-trip test that a `docs[]` payload survives marshal/unmarshal in
-  both repos.
+- Phase 2: `go test ./internal/run/... ./internal/cluster/...` — `resolveCodeUnits`
+  (doc dedup, a doc that fails to load, the no-`doc_ref` case, the architecture.yaml
+  opt-in gate) and the `code_units` wire arg's field names, both against
+  `talooner-plugin/internal/service/units.go`'s `codeUnit` shape directly, since there
+  is no shared proto to catch a rename at compile time.
 - Plugin loop: VCR-backed test — a PR whose diff contradicts its doc yields
   `llm_review.result="mismatch"` and a block + comment with the quoted explanation.
   Determinism test: identical facts evaluated twice ⇒ byte-identical actions and exactly

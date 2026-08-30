@@ -183,6 +183,12 @@ type fakeGitHub struct {
 	teamsFails   bool   // true to fail the teams read with a 500
 	files        string // the PR's changed-files body; "" means the default
 
+	architecture string // the tenant architecture.yaml body; "" means no file
+	// docs is code_unit doc content, keyed by the exact base-branch path
+	// (Phase 2's resolveCodeUnits) — a path absent here 404s like any other
+	// unrecognised /contents/ read.
+	docs map[string]string
+
 	// fork makes the fixture PR's head repo a different one from its base repo,
 	// which is what pr.IsFork keys on and what turns on E2's plan comparison.
 	fork bool
@@ -468,12 +474,29 @@ func (g *fakeGitHub) client(t *testing.T) *github.Client {
 			_, _ = fmt.Fprintf(w, `{"type":"file","size":%d,"encoding":"base64","content":%q}`,
 				len(g.teams), base64.StdEncoding.EncodeToString([]byte(g.teams)))
 
-		// Any other contents read — CODEOWNERS among them — is an answer, not a
-		// file. The run fetches .github/CODEOWNERS / CODEOWNERS / docs/CODEOWNERS
-		// for user.owner; a repo without one must 404 like a real miss. This case
-		// is last among the /contents/ branches, so the ruleset and config
-		// branches above still win for their exact paths.
+		case strings.HasSuffix(r.URL.Path, "/contents/.github/talooner/architecture.yaml"):
+			if g.architecture == "" {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = fmt.Fprint(w, `{"message":"Not Found"}`)
+				return
+			}
+			_, _ = fmt.Fprintf(w, `{"type":"file","size":%d,"encoding":"base64","content":%q}`,
+				len(g.architecture), base64.StdEncoding.EncodeToString([]byte(g.architecture)))
+
+		// Any other contents read — CODEOWNERS and code_unit docs among them — is
+		// an answer, not a file, unless g.docs names it: the run fetches
+		// .github/CODEOWNERS / CODEOWNERS / docs/CODEOWNERS for user.owner, and a
+		// code unit's doc_ref for llm_review; either 404s like a real miss when
+		// not stubbed. This case is last among the /contents/ branches, so the
+		// ruleset and config branches above still win for their exact paths.
 		case strings.Contains(r.URL.Path, "/contents/"):
+			for path, body := range g.docs {
+				if strings.HasSuffix(r.URL.Path, "/contents/"+path) {
+					_, _ = fmt.Fprintf(w, `{"type":"file","size":%d,"encoding":"base64","content":%q}`,
+						len(body), base64.StdEncoding.EncodeToString([]byte(body)))
+					return
+				}
+			}
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = fmt.Fprint(w, `{"message":"Not Found"}`)
 			return
@@ -638,6 +661,101 @@ func TestReviewCommandRunsTheWholeSpine(t *testing.T) {
 	}
 	if set["pr.has_description"] != false {
 		t.Errorf("pr.has_description = %v, want false for an empty body", set["pr.has_description"])
+	}
+}
+
+// Without architecture.yaml, code_unit doc loading is not attempted at all —
+// even though the default fixture's changed file (internal/auth/token.go)
+// matches the built-in service layer and resolves a doc_ref by convention.
+// This is the opt-in gate (expert-review-system.md, Phase 2): the built-in
+// layer table matches almost every Go PR, so resolving docs and warning on
+// every one with no docs/services/*.md would spam every onboarded repo that
+// never asked for llm_review. architecture.yaml, even a one-line rule for
+// something else entirely, is the signal that a repo wants this.
+func TestCodeUnitsOmittedWithoutArchitectureYaml(t *testing.T) {
+	f := &fakeCluster{answers: evaluated(&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_APPROVE, Target: "pr"})}
+	gh := &fakeGitHub{} // no architecture.yaml, and no docs/services/auth.md stubbed either
+
+	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	args := f.argsOf(t, cluster.ActionEvaluatePR)
+	if _, ok := args["code_units"]; ok {
+		t.Errorf("code_units arg present = %q, want absent with no architecture.yaml", args["code_units"])
+	}
+	if len(gh.comments) != 0 {
+		t.Errorf("comments written = %+v, want none — a missing doc must not warn when the repo never opted in", gh.comments)
+	}
+}
+
+// With architecture.yaml present (the opt-in) and the built-in convention's doc
+// actually on the base branch, evaluate_pr's code_units arg carries the unit
+// with its doc content inline — the shape talooner-plugin's units.go decodes
+// (name, important, doc_url, doc_content, diff).
+func TestCodeUnitsSentWithDocContentWhenArchitectureYamlPresent(t *testing.T) {
+	f := &fakeCluster{answers: evaluated(&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_APPROVE, Target: "pr"})}
+	gh := &fakeGitHub{
+		// This rule does not touch internal/auth at all: the built-in layer
+		// table still resolves it by convention. architecture.yaml's mere
+		// presence is the opt-in signal, not what it says.
+		architecture: "- path: unrelated/\n  kind: service\n",
+		docs:         map[string]string{"docs/services/auth.md": "auth must hash passwords, never log them"},
+	}
+
+	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	args := f.argsOf(t, cluster.ActionEvaluatePR)
+	raw, ok := args["code_units"]
+	if !ok {
+		t.Fatalf("no code_units arg sent, args = %v", args)
+	}
+	var units []map[string]any
+	if err := json.Unmarshal([]byte(raw), &units); err != nil {
+		t.Fatalf("code_units arg is not JSON: %v", err)
+	}
+	if len(units) != 1 {
+		t.Fatalf("code_units = %v, want one unit", units)
+	}
+	want := map[string]any{
+		"name": "internal/auth", "important": true, "doc_url": "docs/services/auth.md",
+		"doc_content": "auth must hash passwords, never log them",
+	}
+	for k, v := range want {
+		if units[0][k] != v {
+			t.Errorf("code_units[0][%q] = %v, want %v", k, units[0][k], v)
+		}
+	}
+	if len(gh.comments) != 0 {
+		t.Errorf("comments written = %+v, want none — the doc was found", gh.comments)
+	}
+}
+
+// A doc_ref the base branch does not have — architecture.yaml opted in, but
+// docs/services/auth.md was never written — drops the unit from code_units
+// (nothing to review it against) and warns in the sticky comment rather than
+// failing the run: llm_review is additive, never a reason to withhold the rest
+// of the verdict.
+func TestMissingCodeUnitDocWarnsButDoesNotFailTheRun(t *testing.T) {
+	f := &fakeCluster{answers: evaluated(&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_APPROVE, Target: "pr"})}
+	gh := &fakeGitHub{architecture: "- path: unrelated/\n  kind: service\n"} // opted in, no docs/services/auth.md stubbed
+
+	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	args := f.argsOf(t, cluster.ActionEvaluatePR)
+	if raw, ok := args["code_units"]; ok {
+		t.Errorf("code_units arg = %q, want absent — the only unit's doc is missing", raw)
+	}
+	if got := gh.check(t).Conclusion; got != github.ConclusionSuccess {
+		t.Errorf("conclusion = %q, want %q — a missing doc must not fail the run", got, github.ConclusionSuccess)
+	}
+	got := gh.wrote(t)
+	if !strings.Contains(got.Body, "code_unit_doc_unavailable") || !strings.Contains(got.Body, "docs/services/auth.md") {
+		t.Errorf("comment does not warn about the missing doc:\n%s", got.Body)
 	}
 }
 
