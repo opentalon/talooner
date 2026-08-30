@@ -230,7 +230,7 @@ branch. Consequences:
   interpreted.
 - `llm_review` per-PR call cap and per-tenant budget ceiling, enforced
   cluster-side —
-  [`talooner-plugin/llm-review.md`](https://github.com/opentalon/talooner-plugin/blob/main/llm-review.md).
+  [`talooner-plugin/docs/llm-review.md`](https://github.com/opentalon/talooner-plugin/blob/main/docs/llm-review.md).
 
 ## Error codes
 

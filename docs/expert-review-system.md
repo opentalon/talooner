@@ -273,6 +273,22 @@ rule "Block on any documented-behavior drift" {
 
 ### Phase 4 — talooner-plugin: the review as a tool call, delegated to opentalon
 
+> **Shipped 2026-08-28** (`talooner-plugin#54`), diverged from the plan below in
+> several particulars — treat this section as the design rationale, not the
+> current interface. Real shapes: facts are `unit.*` (`unit.llm_result`,
+> `unit.llm_explanation`), not `llm_review.*`; the doc field stayed `doc_url` +
+> `doc_content` inline on each `code_unit`, not a `doc_ref` + separate `docs[]`
+> proto field; the cache key is `(scope, head_sha, unit, prompt_version)`, no
+> `path`; there's one per-tenant budget, no separate per-PR cap; the host call is
+> a generic bounded, tool-less `_subprocess.run` sub-agent, not a dedicated
+> `<llm-plugin>` review action; and no VCR cassettes yet — tests use a fake
+> `HostCaller`. Current design: `talooner-plugin/docs/llm-review.md`.
+>
+> **Not reachable end-to-end yet.** The plugin can execute `llm_review` given
+> `code_units`, but this repo's Phase 1 (below) only produces `code.*` gating
+> facts for its own ruleset — it doesn't send `code_units` on `evaluate_pr` yet.
+> That wiring is `#78`.
+
 Adopt the proven tln-plugin bridge instead of reimplementing an LLM client. The
 review is a tln tool call serviced by a host-backed `ToolResolver`; the plugin holds
 no provider credentials.
@@ -307,12 +323,18 @@ no provider credentials.
   (never crash, never silently approve); `force` bypasses the cache only, not
   budgets. Prompt lives in a `.txt` file; VCR cassettes; determinism test: same facts
   twice ⇒ byte-identical actions + exactly one host call
-  (`talooner-plugin/testing.md:88-107`).
-- Update the design docs: `llm-review.md` + `facts.md:128-140` — the review is a
-  host-delegated tool call over per-repo docs, cached as a fact; `doc_ref` is a repo
-  path (was `doc_url`). The old `do llm_review` two-pass framing is superseded.
+  (`talooner-plugin/docs/testing.md:88-107`).
+- Design docs updated to match what shipped: `talooner-plugin/docs/llm-review.md`,
+  `talooner-plugin/docs/facts.md` (`unit.*`), `talooner-plugin/docs/diagrams.md`
+  §5, and the Phase 3 section of `talooner-plugin/docs/roadmap.md`.
 
 ### Phase 5 — opentalon: runtime/provider + the LLM tool
+
+> **Turned out unnecessary.** `talooner-plugin#54` targets opentalon's existing
+> `_subprocess.run` action (bounded, tool-less sub-agent) instead of a new
+> dedicated review tool/plugin — no new opentalon-side action, provider config,
+> or capability handshake was needed. Kept below for why a dedicated tool was
+> considered.
 
 - Expose an LLM review tool/action the resolver targets via `RunAction` — either a
   small dedicated plugin (`guard-llm` is the closest reference,
