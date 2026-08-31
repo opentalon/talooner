@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -13,7 +14,10 @@ import (
 	"github.com/opentalon/talooner/internal/onboard"
 )
 
-// fakeGit scripts git responses the same way fakeGH scripts gh ones.
+// fakeGit scripts git responses the same way fakeGH scripts gh ones. fail is
+// keyed by the full joined arg list (not just the subcommand) so a test can
+// distinguish e.g. `show-ref ... refs/heads/master` failing from
+// `show-ref ... refs/heads/main` succeeding.
 type fakeGit struct {
 	fail  map[string]error
 	calls [][]string
@@ -21,10 +25,8 @@ type fakeGit struct {
 
 func (f *fakeGit) Run(_ context.Context, _ string, args ...string) (string, error) {
 	f.calls = append(f.calls, append([]string(nil), args...))
-	if len(args) > 0 {
-		if err, ok := f.fail[args[0]]; ok {
-			return "", err
-		}
+	if err, ok := f.fail[strings.Join(args, " ")]; ok {
+		return "", err
 	}
 	return "opened https://github.com/acme/api/pull/42\n", nil
 }
@@ -112,14 +114,17 @@ func TestOnboardLLMPathHappyPath(t *testing.T) {
 		t.Errorf("ruleset = %q, want the generated one", rulesetBytes)
 	}
 
-	if len(git.calls) != 4 {
-		t.Fatalf("git calls = %v, want 4 (checkout, add, commit, push)", git.calls)
+	if len(git.calls) != 5 {
+		t.Fatalf("git calls = %v, want 5 (show-ref master, checkout, add, commit, push)", git.calls)
 	}
-	if git.calls[0][0] != "checkout" {
-		t.Errorf("first git call = %v, want checkout", git.calls[0])
+	if git.calls[0][0] != "show-ref" {
+		t.Errorf("first git call = %v, want show-ref (base auto-detect)", git.calls[0])
 	}
-	if git.calls[3][0] != "push" {
-		t.Errorf("last git call = %v, want push", git.calls[3])
+	if git.calls[1][0] != "checkout" || !containsArg(git.calls[1], "master") {
+		t.Errorf("second git call = %v, want checkout onto master (auto-detected)", git.calls[1])
+	}
+	if git.calls[4][0] != "push" {
+		t.Errorf("last git call = %v, want push", git.calls[4])
 	}
 
 	foundPRCreate := false
@@ -133,6 +138,91 @@ func TestOnboardLLMPathHappyPath(t *testing.T) {
 	}
 	if !foundPRCreate {
 		t.Errorf("gh calls = %v, want a pr create call", gh.calls)
+	}
+}
+
+func TestOnboardBaseFallsBackToMainWhenNoMaster(t *testing.T) {
+	withHome(t)
+	f := routedOnboardFake(t, map[string]func(*pluginpb.ToolCallRequest) *pluginpb.ToolResultResponse{
+		"generate_ruleset": structured(t, &taloonerpb.GenerateRulesetResponse{
+			Ruleset: `rule "x" {}`, RulesetTest: `test "y" {}`, Source: "llm",
+		}),
+		"validate_ruleset": passingValidate(t),
+		"run_ruleset_test": passingTest(t),
+	})
+	host := serve(t, f)
+	seedRulesCreds(t, host)
+	t.Chdir(t.TempDir())
+
+	git := &fakeGit{fail: map[string]error{
+		"show-ref --verify --quiet refs/heads/master": errors.New("not a valid ref"),
+	}}
+	var out, errw bytes.Buffer
+	code := runOnboard(context.Background(), []string{"--repo", "acme/api"}, &out, &errw, &fakeGH{}, git)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errw.String())
+	}
+	if !containsArg(git.calls[2], "main") {
+		t.Errorf("checkout call = %v, want it to cut from main", git.calls[2])
+	}
+}
+
+func TestOnboardBaseErrorsWhenNeitherMasterNorMainExist(t *testing.T) {
+	withHome(t)
+	f := routedOnboardFake(t, map[string]func(*pluginpb.ToolCallRequest) *pluginpb.ToolResultResponse{
+		"generate_ruleset": structured(t, &taloonerpb.GenerateRulesetResponse{
+			Ruleset: `rule "x" {}`, RulesetTest: `test "y" {}`, Source: "llm",
+		}),
+		"validate_ruleset": passingValidate(t),
+		"run_ruleset_test": passingTest(t),
+	})
+	host := serve(t, f)
+	seedRulesCreds(t, host)
+	t.Chdir(t.TempDir())
+
+	git := &fakeGit{fail: map[string]error{
+		"show-ref --verify --quiet refs/heads/master": errors.New("not a valid ref"),
+		"show-ref --verify --quiet refs/heads/main":   errors.New("not a valid ref"),
+	}}
+	var out, errw bytes.Buffer
+	code := runOnboard(context.Background(), []string{"--repo", "acme/api"}, &out, &errw, &fakeGH{}, git)
+	if code != 1 {
+		t.Fatalf("code = %d, want 1", code)
+	}
+	if !strings.Contains(errw.String(), "--base") {
+		t.Errorf("stderr = %q, want it to point at --base", errw.String())
+	}
+	for _, call := range git.calls {
+		if call[0] == "checkout" || call[0] == "push" {
+			t.Errorf("git calls = %v, want no checkout/push when base can't be resolved", git.calls)
+		}
+	}
+}
+
+func TestOnboardExplicitBaseSkipsAutoDetect(t *testing.T) {
+	withHome(t)
+	f := routedOnboardFake(t, map[string]func(*pluginpb.ToolCallRequest) *pluginpb.ToolResultResponse{
+		"generate_ruleset": structured(t, &taloonerpb.GenerateRulesetResponse{
+			Ruleset: `rule "x" {}`, RulesetTest: `test "y" {}`, Source: "llm",
+		}),
+		"validate_ruleset": passingValidate(t),
+		"run_ruleset_test": passingTest(t),
+	})
+	host := serve(t, f)
+	seedRulesCreds(t, host)
+	t.Chdir(t.TempDir())
+
+	git := &fakeGit{}
+	var out, errw bytes.Buffer
+	code := runOnboard(context.Background(), []string{"--repo", "acme/api", "--base", "develop"}, &out, &errw, &fakeGH{}, git)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errw.String())
+	}
+	if len(git.calls) == 0 || git.calls[0][0] != "checkout" {
+		t.Fatalf("git calls = %v, want checkout first — an explicit --base should skip auto-detect entirely", git.calls)
+	}
+	if !containsArg(git.calls[0], "develop") {
+		t.Errorf("checkout call = %v, want it to cut from develop", git.calls[0])
 	}
 }
 
