@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -81,7 +80,7 @@ func TestInitNoStoredCredentials(t *testing.T) {
 	}
 }
 
-func TestInitHappyPathWritesFilesAndSetsSecrets(t *testing.T) {
+func TestInitHappyPathSetsSecretsOnly(t *testing.T) {
 	creds := seedCreds(t)
 	t.Chdir(t.TempDir())
 	gh := &fakeGH{}
@@ -94,12 +93,9 @@ func TestInitHappyPathWritesFilesAndSetsSecrets(t *testing.T) {
 		t.Error("API key leaked into stdout/stderr")
 	}
 
-	if _, err := os.Stat(onboard.WorkflowPath); err != nil {
-		t.Errorf("expected %s to exist: %v", onboard.WorkflowPath, err)
-	}
-	// init no longer writes a ruleset — `talooner onboard` owns that, since a
-	// repo-shaped ruleset needs to investigate the repo first.
-	for _, path := range []string{onboard.RulesetPath, onboard.RulesetTestPath} {
+	// init writes no local files at all — workflow, ruleset, and PR are all
+	// `talooner onboard`'s job.
+	for _, path := range []string{onboard.WorkflowPath, onboard.RulesetPath, onboard.RulesetTestPath} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Errorf("expected %s NOT to exist after init, got err=%v", path, err)
 		}
@@ -150,62 +146,6 @@ func TestInitOrgFlagSetsOrgSecretsWithVisibility(t *testing.T) {
 	}
 }
 
-func TestInitConflictStopsBeforeGH(t *testing.T) {
-	seedCreds(t)
-	t.Chdir(t.TempDir())
-	if err := os.MkdirAll(filepath.Dir(onboard.WorkflowPath), 0755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	if err := os.WriteFile(onboard.WorkflowPath, []byte("# a maintainer's own workflow\n"), 0644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	gh := &fakeGH{}
-	var out, errw bytes.Buffer
-	code := runInit(context.Background(), []string{"--repo", "acme/api"}, &out, &errw, gh)
-	if code != 1 {
-		t.Fatalf("code = %d, want 1", code)
-	}
-	if !strings.Contains(errw.String(), "--force") {
-		t.Errorf("stderr = %q, want it to mention --force", errw.String())
-	}
-	if len(gh.calls) != 0 {
-		t.Errorf("gh calls = %v, want none — a file conflict must stop before touching GitHub", gh.calls)
-	}
-	got, err := os.ReadFile(onboard.WorkflowPath)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	if string(got) != "# a maintainer's own workflow\n" {
-		t.Errorf("existing file was overwritten without --force: %q", got)
-	}
-}
-
-func TestInitForceOverwritesConflict(t *testing.T) {
-	seedCreds(t)
-	t.Chdir(t.TempDir())
-	if err := os.MkdirAll(filepath.Dir(onboard.WorkflowPath), 0755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	if err := os.WriteFile(onboard.WorkflowPath, []byte("# stale\n"), 0644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	gh := &fakeGH{}
-	var out, errw bytes.Buffer
-	code := runInit(context.Background(), []string{"--repo", "acme/api", "--force"}, &out, &errw, gh)
-	if code != 0 {
-		t.Fatalf("code = %d, stderr = %q", code, errw.String())
-	}
-	got, err := os.ReadFile(onboard.WorkflowPath)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	if !bytes.Equal(got, onboard.Workflow) {
-		t.Errorf("--force did not overwrite the stale file")
-	}
-}
-
 func TestInitGHNotAuthenticatedReportsWhichStepFailed(t *testing.T) {
 	seedCreds(t)
 	t.Chdir(t.TempDir())
@@ -217,10 +157,6 @@ func TestInitGHNotAuthenticatedReportsWhichStepFailed(t *testing.T) {
 	}
 	if !strings.Contains(errw.String(), "not authenticated") {
 		t.Errorf("stderr = %q, want a not-authenticated message", errw.String())
-	}
-	// Files still got written — only the GitHub half failed.
-	if _, err := os.Stat(onboard.WorkflowPath); err != nil {
-		t.Errorf("workflow file should exist even though gh auth failed: %v", err)
 	}
 }
 

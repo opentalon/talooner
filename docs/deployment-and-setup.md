@@ -120,36 +120,42 @@ credentials existing.
 
 ### Wire up the repo
 
-Run inside a local clone of the target repo, at its root — `init` writes
-files relative to the current directory, it does not clone anything itself:
+`init` only sets secrets via the GitHub API — it writes no local files, so
+it doesn't need to run inside a checkout of the target repo:
 
 ```bash
-cd <local clone of the target repo>
 talooner init --repo <owner/name> [--org <org>]
 ```
 
-Writes, in order:
+Runs `gh secret set OPENTALON_HOST` / `OPENTALON_API_KEY` — repo-scoped by
+default, org-scoped with `--org <org>` (the sane choice past a couple of
+repos on one cluster).
 
-- `.github/workflows/talooner.yml`
-- `.github/talooner/rules.tln` (starter policy)
-- `.github/talooner/rules.tln.test`
-- `gh secret set OPENTALON_HOST` / `OPENTALON_API_KEY` — repo-scoped by
-  default, org-scoped with `--org <org>` (the sane choice past a couple of
-  repos on one cluster)
+Then scaffold the workflow and a repo-shaped ruleset, and open a PR with
+both:
 
-Nothing is committed automatically — `init` only writes local files and sets
-secrets; commit and push the workflow and ruleset yourself.
+```bash
+cd <local clone of the target repo>
+talooner onboard --repo <owner/name>
+```
 
-### Two hand-fixes `init` does not make for you
+`onboard` writes `.github/talooner/rules.tln` and `.github/talooner/rules.tln.test`,
+then commits, pushes, and opens a PR — nothing lands on the default branch
+without review. It does not yet write `.github/workflows/talooner.yml`; add
+that file by hand for now (template below), and commit it in the same PR or
+a follow-up.
 
-**1. The action pin.** `init`'s template pins `uses: opentalon/talooner@v1`
-— **`v1` does not exist as a tag yet.** Until a real `vX.Y.Z` release is cut,
-edit `.github/workflows/talooner.yml` to pin a real published tag instead
-(check `git tag --list` in `talooner` — currently `v0.0.1-alpha2`, or newer)
-or a commit sha off `master`. This has to be bumped by hand for every new
-prerelease until `v1` exists; nothing tracks it automatically.
+### Hand-fixes needed on top of `init`/`onboard`
 
-**2. `.github/talooner/config.yaml` — not written by `init` at all.**
+**1. The workflow file itself.** Neither `init` nor `onboard` writes
+`.github/workflows/talooner.yml` yet. Add one by hand, pinning
+`uses: opentalon/talooner@<tag>` to a real published tag — **`v1` does not
+exist yet** (check `git tag --list` in `talooner` — currently
+`v0.0.1-alpha2`, or newer) or a commit sha off `master`. This has to be
+bumped by hand for every new prerelease until `v1` exists; nothing tracks it
+automatically.
+
+**2. `.github/talooner/config.yaml` — not written by `init` or `onboard`.**
 Without it, `pr.tests_passing` and `pr.lint_passing` are never set (they
 require the tenant to declare which CI check names to match), so any rule
 conditioned on them silently never fires. Add it by hand, naming your repo's
