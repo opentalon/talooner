@@ -3,7 +3,7 @@ module github.com/opentalon/talooner
 go 1.25.0
 
 require (
-	github.com/opentalon/opentalon v0.0.27
+	github.com/opentalon/opentalon v0.0.28
 	github.com/opentalon/talooner-plugin v0.1.1-0.20260831121727-d388645117b6
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
