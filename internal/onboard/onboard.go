@@ -1,6 +1,6 @@
-// Package onboard is the guts of `talooner init`: the starter files a repo
-// gets wired up with, and writing them without clobbering something a
-// maintainer already edited.
+// Package onboard is the guts of `talooner init` and `talooner onboard`: the
+// starter files a repo gets wired up with, and writing them without
+// clobbering something a maintainer already edited.
 package onboard
 
 import (
@@ -14,17 +14,22 @@ import (
 //go:embed templates/talooner.yml
 var Workflow []byte
 
+// Ruleset and RulesetTest are no longer written by `init` — they are
+// `talooner onboard`'s fallback pair, substituted in when the cluster's
+// generate_ruleset reports source == "fallback" (no host, quota exhausted,
+// or an unparseable/invalid model reply).
+//
 //go:embed templates/rules.tln
 var Ruleset []byte
 
 //go:embed templates/rules.tln.test
 var RulesetTest []byte
 
-// WorkflowPath, RulesetPath and RulesetTestPath are where `init` writes the
-// three template files, relative to the current working directory — the
-// same paths internal/run reads at runtime (RulesetPath there is the
-// canonical source; this package doesn't import internal/run to avoid a
-// dependency edge from onboarding back into the run loop).
+// WorkflowPath is where `init` writes the workflow file. RulesetPath and
+// RulesetTestPath are where `onboard` writes the generated (or fallback)
+// ruleset — the same paths internal/run reads at runtime (RulesetPath there
+// is the canonical source; this package doesn't import internal/run to
+// avoid a dependency edge from onboarding back into the run loop).
 const (
 	WorkflowPath    = ".github/workflows/talooner.yml"
 	RulesetPath     = ".github/talooner/rules.tln"

@@ -30,6 +30,7 @@ Usage:
   talooner cluster login --url <host> --key <api-key>
   talooner cluster whoami
   talooner init --repo <owner/name> [--org <org>] [--force]
+  talooner onboard --repo <owner/name> [--base <branch>] [--branch <branch>] [--force] [--no-pr]
   talooner rules validate <path-to-.github/talooner>
   talooner rules test <path-to-.github/talooner>
   talooner rules plan --repo <owner/name> --pr <number>
@@ -52,6 +53,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runCluster(ctx, args[1:], stdout, stderr)
 	case "init":
 		return runInit(ctx, args[1:], stdout, stderr, onboard.GH{})
+	case "onboard":
+		return runOnboard(ctx, args[1:], stdout, stderr, onboard.GH{}, onboard.Git{})
 	case "rules":
 		return runRules(ctx, args[1:], stdout, stderr)
 	case "version":
@@ -163,12 +166,14 @@ func runClusterWhoami(ctx context.Context, args []string, stdout, stderr io.Writ
 	return 0
 }
 
-// runInit is the entire GitHub-side install (auth.md, "Onboarding"): a
-// workflow file, a starter ruleset with its own tests, and the two secrets
-// the workflow reads. It writes local files before touching GitHub, so a
-// maintainer can always see exactly what changed with `git diff` before it's
-// pushed. gh is the gh CLI wrapper — a real onboard.GH{} from main, a fake
-// from tests, so the test suite never shells out to a real gh binary.
+// runInit is the GitHub-side plumbing install (auth.md, "Onboarding"): a
+// workflow file and the two secrets it reads. It writes local files before
+// touching GitHub, so a maintainer can always see exactly what changed with
+// `git diff` before it's pushed. It writes no ruleset — `talooner onboard`
+// owns scaffolding rules.tln/rules.tln.test, since a repo-shaped ruleset
+// needs to investigate the repo first. gh is the gh CLI wrapper — a real
+// onboard.GH{} from main, a fake from tests, so the test suite never shells
+// out to a real gh binary.
 func runInit(ctx context.Context, args []string, stdout, stderr io.Writer, gh onboard.Runner) int {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -198,30 +203,20 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer, gh on
 		return 1
 	}
 
-	files := []struct {
-		path    string
-		content []byte
-	}{
-		{onboard.WorkflowPath, onboard.Workflow},
-		{onboard.RulesetPath, onboard.Ruleset},
-		{onboard.RulesetTestPath, onboard.RulesetTest},
+	outcome, diff, err := onboard.WriteFile(onboard.WorkflowPath, onboard.Workflow, *force)
+	if err != nil {
+		printf(stderr, "talooner init: writing %s: %v\n", onboard.WorkflowPath, err)
+		return 1
 	}
-	for _, f := range files {
-		outcome, diff, err := onboard.WriteFile(f.path, f.content, *force)
-		if err != nil {
-			printf(stderr, "talooner init: writing %s: %v\n", f.path, err)
-			return 1
-		}
-		switch outcome {
-		case onboard.Created:
-			printf(stdout, "wrote %s\n", f.path)
-		case onboard.Unchanged:
-			printf(stdout, "%s already up to date\n", f.path)
-		case onboard.Conflict:
-			printf(stderr, "talooner init: %s already exists and differs from the starter:\n\n%s\n"+
-				"rerun with --force to overwrite it\n", f.path, diff)
-			return 1
-		}
+	switch outcome {
+	case onboard.Created:
+		printf(stdout, "wrote %s\n", onboard.WorkflowPath)
+	case onboard.Unchanged:
+		printf(stdout, "%s already up to date\n", onboard.WorkflowPath)
+	case onboard.Conflict:
+		printf(stderr, "talooner init: %s already exists and differs from the starter:\n\n%s\n"+
+			"rerun with --force to overwrite it\n", onboard.WorkflowPath, diff)
+		return 1
 	}
 
 	if err := onboard.CheckGH(ctx, gh); err != nil {
@@ -247,7 +242,7 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer, gh on
 		printf(stdout, "set secret %s\n", s.name)
 	}
 
-	printf(stdout, "%s is wired up — commit the workflow and ruleset, then comment `!talooner /review` on a PR\n", *repo)
+	printf(stdout, "%s is wired up — commit the workflow, then run `talooner onboard --repo %s` to scaffold a ruleset\n", *repo, *repo)
 	return 0
 }
 
