@@ -145,6 +145,11 @@ type fakeGitHub struct {
 	methods  []string
 	checks   []writtenCheck
 	comments []writtenComment
+	// nextCommentID assigns each created comment a distinct id, so a later
+	// sticky write in the same run can find and edit it back — the same thing
+	// a real listing would return after a real post (github.UpsertComment,
+	// "the unhappy paths are the point").
+	nextCommentID int64
 
 	permission string // the collaborator permission level to report
 	prStatus   int    // non-zero to fail the pull request fetch
@@ -299,7 +304,9 @@ func (g *fakeGitHub) client(t *testing.T) *github.Client {
 			_, _ = fmt.Fprint(w, `{"id":991}`)
 
 		case strings.HasSuffix(r.URL.Path, "/comments") && r.Method == http.MethodGet:
+			g.mu.Lock()
 			raw, err := json.Marshal(g.existing)
+			g.mu.Unlock()
 			if err != nil {
 				t.Errorf("encode existing comments: %v", err)
 			}
@@ -316,14 +323,27 @@ func (g *fakeGitHub) client(t *testing.T) *github.Client {
 				t.Errorf("decode comment: %v", err)
 			}
 			got.created = r.Method == http.MethodPost
-			if !got.created {
+
+			g.mu.Lock()
+			if got.created {
+				// A real listing would show a just-created comment to the next
+				// caller; g.existing plays that role here too, not only the
+				// fixture for what an earlier run left (TestReviewCommand...).
+				g.nextCommentID++
+				got.id = 900 + g.nextCommentID
+				g.existing = append(g.existing, existingComment{ID: got.id, Body: got.Body})
+			} else {
 				id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
 				fmt.Sscan(id, &got.id) //nolint:errcheck // a bad id fails the assertions below
+				for i := range g.existing {
+					if g.existing[i].ID == got.id {
+						g.existing[i].Body = got.Body
+					}
+				}
 			}
-			g.mu.Lock()
 			g.comments = append(g.comments, got)
 			g.mu.Unlock()
-			_, _ = fmt.Fprint(w, `{"id":555}`)
+			_, _ = fmt.Fprintf(w, `{"id":%d}`, got.id)
 
 		case strings.HasSuffix(r.URL.Path, "/reviews") && r.Method == http.MethodGet:
 			raw, err := json.Marshal(g.standing)
@@ -586,16 +606,38 @@ func (g *fakeGitHub) check(t *testing.T) writtenCheck {
 	return g.checks[0]
 }
 
-// wrote returns the one comment the run wrote, failing the test if it wrote
-// none or more than one.
-func (g *fakeGitHub) wrote(t *testing.T) writtenComment {
-	t.Helper()
+// ackBody is the raw text of the `!talooner /review` acknowledgement as it
+// reaches GitHub: the review marker plus Acknowledge(), the same shape any
+// other TopicReview write has (github.StickyComment.text).
+var ackBody = comment.Marker(comment.TopicReview) + "\n" + comment.Acknowledge()
+
+// verdictComments is every comment write the run made, minus the initial
+// acknowledgement post — every comment assertion in this file predates the
+// ack and is not testing for it. Once report() runs, the ack has already been
+// edited into whatever it landed on, so this is never the ack's own final
+// state, only the POST that preceded it.
+func (g *fakeGitHub) verdictComments() []writtenComment {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if len(g.comments) != 1 {
-		t.Fatalf("comments written = %d, want exactly 1: %+v", len(g.comments), g.comments)
+	var out []writtenComment
+	for _, c := range g.comments {
+		if c.Body == ackBody {
+			continue
+		}
+		out = append(out, c)
 	}
-	return g.comments[0]
+	return out
+}
+
+// wrote returns the one verdict comment the run wrote, failing the test if it
+// wrote none or more than one.
+func (g *fakeGitHub) wrote(t *testing.T) writtenComment {
+	t.Helper()
+	got := g.verdictComments()
+	if len(got) != 1 {
+		t.Fatalf("comments written = %d, want exactly 1: %+v", len(got), got)
+	}
+	return got[0]
 }
 
 func commentEvent(body string) *event.Event {
@@ -664,6 +706,73 @@ func TestReviewCommandRunsTheWholeSpine(t *testing.T) {
 	}
 }
 
+// A manual `!talooner /review` can take long enough that, without an
+// immediate reply, the commander sees nothing happen until the verdict lands
+// — or goes looking in the Actions tab, which most never open. So the very
+// first thing after subscribing is a plain "on it" comment, ahead of the
+// ruleset load and the cluster round trip that follow.
+func TestReviewCommandAcknowledgesBeforeEvaluating(t *testing.T) {
+	f := &fakeCluster{answers: evaluated(&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_APPROVE, Target: "pr"})}
+	gh := &fakeGitHub{}
+
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(gh.comments) == 0 || gh.comments[0].Body != ackBody {
+		t.Fatalf("first comment written = %+v, want the acknowledgement first", gh.comments)
+	}
+	if !gh.comments[0].created {
+		t.Error("the acknowledgement must be a new comment, not an edit")
+	}
+}
+
+// The ack is posted on the review topic itself, so once report() writes the
+// real verdict it edits the very same comment rather than leaving the ack
+// standing next to it — no stale "Evaluating…" left behind, and no second
+// comment either.
+func TestReviewCommandEditsAcknowledgementIntoVerdict(t *testing.T) {
+	f := &fakeCluster{answers: evaluated(&taloonerpb.Action{
+		Verb: taloonerpb.Verb_VERB_COMMENT, Target: "pr", Text: "describe your change",
+	})}
+	gh := &fakeGitHub{}
+
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(gh.comments) != 2 {
+		t.Fatalf("comments written = %+v, want exactly 2: the ack, then the edit that replaces it", gh.comments)
+	}
+	ack, edit := gh.comments[0], gh.comments[1]
+	if !ack.created || ack.Body != ackBody {
+		t.Fatalf("first write = %+v, want the ack, created", ack)
+	}
+	if edit.created || edit.id != ack.id {
+		t.Fatalf("second write = %+v, want an edit of the ack's own comment (id %d)", edit, ack.id)
+	}
+	if strings.Contains(edit.Body, "Evaluating") {
+		t.Error("the ack text is still there; it should have been replaced by the verdict")
+	}
+	if !strings.Contains(edit.Body, "describe your change") {
+		t.Errorf("edited comment does not carry the finding:\n%s", edit.Body)
+	}
+}
+
+// A failure to post the acknowledgement is not worth failing an otherwise
+// working run over — the verdict itself is what matters.
+func TestReviewCommandStillRunsIfAcknowledgeFails(t *testing.T) {
+	f := &fakeCluster{answers: evaluated(&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_APPROVE, Target: "pr"})}
+	gh := &fakeGitHub{commentFails: true}
+
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run: %v, want the acknowledgement failure to be swallowed", err)
+	}
+	if got := gh.check(t).Conclusion; got != github.ConclusionSuccess {
+		t.Errorf("conclusion = %q, want success — an unwritable ack must not fail the run", got)
+	}
+}
+
 // Without architecture.yaml, code_unit doc loading is not attempted at all —
 // even though the default fixture's changed file (internal/auth/token.go)
 // matches the built-in service layer and resolves a doc_ref by convention.
@@ -684,8 +793,11 @@ func TestCodeUnitsOmittedWithoutArchitectureYaml(t *testing.T) {
 	if _, ok := args["code_units"]; ok {
 		t.Errorf("code_units arg present = %q, want absent with no architecture.yaml", args["code_units"])
 	}
-	if len(gh.comments) != 0 {
-		t.Errorf("comments written = %+v, want none — a missing doc must not warn when the repo never opted in", gh.comments)
+	// Nothing to warn about and nothing to report — the acknowledgement is
+	// edited to say so rather than left standing.
+	got := gh.wrote(t)
+	if !strings.Contains(got.Body, "Nothing to report") {
+		t.Errorf("comment = %q, want it resolved to nothing to report", got.Body)
 	}
 }
 
@@ -728,8 +840,11 @@ func TestCodeUnitsSentWithDocContentWhenArchitectureYamlPresent(t *testing.T) {
 			t.Errorf("code_units[0][%q] = %v, want %v", k, units[0][k], v)
 		}
 	}
-	if len(gh.comments) != 0 {
-		t.Errorf("comments written = %+v, want none — the doc was found", gh.comments)
+	// The doc was found, so nothing warns; the acknowledgement is edited to
+	// say there is nothing to report rather than left standing.
+	edited := gh.wrote(t)
+	if !strings.Contains(edited.Body, "Nothing to report") {
+		t.Errorf("comment = %q, want it resolved to nothing to report", edited.Body)
 	}
 }
 
@@ -1675,9 +1790,12 @@ func TestFindingsArePostedAsOneStickyComment(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
+	// Not a create: the manual /review's own acknowledgement already claimed
+	// the review topic, so the verdict edits it rather than posting a second
+	// comment next to it.
 	got := gh.wrote(t)
-	if !got.created {
-		t.Error("edited a comment on a PR that had none")
+	if got.created {
+		t.Error("posted a second comment instead of editing the acknowledgement")
 	}
 	if !strings.HasPrefix(got.Body, comment.Marker(comment.TopicReview)) {
 		t.Errorf("comment does not start with the review marker:\n%s", got.Body)
@@ -1724,8 +1842,12 @@ func TestARunWithNothingToSayPostsNoComment(t *testing.T) {
 	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if len(gh.comments) != 0 {
-		t.Errorf("comments written = %+v, want none", gh.comments)
+	// A manual /review still owes the commander a reply — the acknowledgement
+	// it already posted is edited to say there is nothing to report, rather
+	// than an automatic push run's silence.
+	got := gh.wrote(t)
+	if !strings.Contains(got.Body, "Nothing to report") {
+		t.Errorf("comment = %q, want it resolved to nothing to report", got.Body)
 	}
 	if got := gh.check(t).Conclusion; got != github.ConclusionSuccess {
 		t.Errorf("conclusion = %q, want %q", got, github.ConclusionSuccess)
@@ -1970,8 +2092,8 @@ func TestAVerbWithNoExecutorFailsBeforeAnythingIsWritten(t *testing.T) {
 	if !errors.Is(err, action.ErrNoExecutor) {
 		t.Errorf("err = %v, want ErrNoExecutor", err)
 	}
-	if len(gh.reviews) != 0 || len(gh.comments) != 0 {
-		t.Errorf("published part of the verdict: reviews %+v, comments %+v", gh.reviews, gh.comments)
+	if verdict := gh.verdictComments(); len(gh.reviews) != 0 || len(verdict) != 0 {
+		t.Errorf("published part of the verdict: reviews %+v, comments %+v", gh.reviews, verdict)
 	}
 	if got := gh.check(t).Conclusion; got != github.ConclusionNeutral {
 		t.Errorf("conclusion = %q, want neutral: this is Talooner's own gap, not a policy outcome", got)
@@ -2081,8 +2203,8 @@ func TestAnUnmappedRequireTargetFailsBeforeAnythingIsWritten(t *testing.T) {
 	if !errors.Is(err, assignment.ErrTarget) {
 		t.Fatalf("err = %v, want ErrTarget", err)
 	}
-	if len(gh.reviews) != 0 || len(gh.comments) != 0 {
-		t.Errorf("published part of the verdict: reviews %+v, comments %+v", gh.reviews, gh.comments)
+	if verdict := gh.verdictComments(); len(gh.reviews) != 0 || len(verdict) != 0 {
+		t.Errorf("published part of the verdict: reviews %+v, comments %+v", gh.reviews, verdict)
 	}
 	if got := gh.check(t).Conclusion; got != github.ConclusionNeutral {
 		t.Errorf("conclusion = %q, want neutral", got)

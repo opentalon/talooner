@@ -116,6 +116,15 @@ func Run(ctx context.Context, r Runner) error {
 			if _, err := r.Cluster.SetSubscription(ctx, repo, ev.PR, true); err != nil {
 				return fmt.Errorf("subscribe %s#%d: %w", repo, ev.PR, err)
 			}
+			// The evaluation below can take long enough that, without this, a
+			// manual /review looks like it did nothing. Posted on the review
+			// topic itself, so report()'s sticky write below finds and edits it
+			// into the verdict rather than leaving it standing next to it —
+			// best effort, since a failed ack is not worth failing a run that
+			// would otherwise succeed.
+			if err := r.sticky(ctx, comment.TopicReview, comment.Acknowledge(), false); err != nil {
+				r.Log.Warn("cannot write the acknowledge comment", "repo", repo, "pr", ev.PR, "err", err)
+			}
 		case command.VerbStop:
 			if _, err := r.Cluster.SetSubscription(ctx, repo, ev.PR, false); err != nil {
 				return fmt.Errorf("unsubscribe %s#%d: %w", repo, ev.PR, err)

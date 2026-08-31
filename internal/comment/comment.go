@@ -254,6 +254,17 @@ func PlanBroken(reason, sha string) string {
 	return b.String()
 }
 
+// Acknowledge is the immediate reply to a manual `!talooner /review`, posted
+// on the review topic before the evaluation starts. A run can take long
+// enough that, without this, the commander sees nothing happen at all — the
+// only other trace in the meantime is the Actions tab, which most commenters
+// never open. Sharing TopicReview is what lets the verdict comment edit this
+// one in place once it is ready, rather than leaving it standing as a second,
+// stale comment next to the real answer.
+func Acknowledge() string {
+	return "Evaluating this pull request…"
+}
+
 // Usage is the one reply a command Talooner does not understand gets. The
 // caller has already established that the commander has write access; replying
 // to anyone else advertises the bot and hands them a way to make it post
