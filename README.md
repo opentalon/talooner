@@ -87,7 +87,7 @@ concurrency:
 
 jobs:
   review:
-    if: github.event_name != 'issue_comment' || startsWith(github.event.comment.body, '@talooner')
+    if: github.event_name != 'issue_comment' || startsWith(github.event.comment.body, '!talooner')
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
@@ -100,7 +100,7 @@ jobs:
           opentalon_api_key: ${{ secrets.OPENTALON_API_KEY }}
 ```
 
-A maintainer comments `@talooner /review`. A runner starts, extracts the facts,
+A maintainer comments `!talooner /review`. A runner starts, extracts the facts,
 sends them to your cluster, executes whatever actions come back, and exits. Same
 commit, same rules, same verdict — every time.
 
@@ -150,13 +150,13 @@ engine internals, fact scoping, `llm_review`, cluster deployment. Start with its
 | 11 | **No dispatch actions.** `deploy_preview` / `screenshot` / `scan_dependencies` are not verbs. The tenant's CI does the work and POSTs the result to the facts API; rules react. |
 | 12 | **Two repos.** `talooner` (bot + CLI) and `talooner-plugin` (engine, fact store, proto). Separate concepts, separate versions. |
 | 13 | **Config lives in the reviewed repo**, at `.github/talooner/`. Policy is versioned, diffable, and testable like any other code. |
-| 14 | **Explicit invocation in v1** — `@talooner /review`. Nothing happens until asked; the PR is then subscribed to pushes. Doubly load-bearing under decision 1: `issue_comment` runs in base-repo context where the secrets exist, while a fork's `pull_request` event gets none. |
+| 14 | **Explicit invocation in v1** — `!talooner /review`. Nothing happens until asked; the PR is then subscribed to pushes. Doubly load-bearing under decision 1: `issue_comment` runs in base-repo context where the secrets exist, while a fork's `pull_request` event gets none. |
 | 15 | **One evaluation per PR.** `module.*` binds to the primary touched module, not N runs. |
 | 16 | **`user.*` namespace** for code ownership, resolved from CODEOWNERS then `modules.yaml`. Distinct from `pr.author`. |
 | 17 | **Naming.** Talooner is the ecosystem *and* the bot. Bot = `talooner`; everything else = `talooner-*`. |
 | 18 | **`/review` always re-evaluates.** No re-render shortcut: decision 9 already makes re-evaluation at an unchanged sha free, because `llm_review` results are facts keyed by sha. `/review --force` busts that cache — the only command that can spend on a sha already answered. |
 | 19 | **Identity is `github-actions[bot]`.** No App to name, no globally unique name to claim, no name collision between installs. The brand is the action ref `opentalon/talooner@v1`. |
-| 20 | **No reactive wake in v1.** Nothing is alive between events, so a fact POSTed by your CI does not by itself produce a comment. Someone types `@talooner /review` and the next run picks it up. Dispatch- and poll-based wake are phase 4, if ever. |
+| 20 | **No reactive wake in v1.** Nothing is alive between events, so a fact POSTed by your CI does not by itself produce a comment. Someone types `!talooner /review` and the next run picks it up. Dispatch- and poll-based wake are phase 4, if ever. |
 
 ## What running this will require
 

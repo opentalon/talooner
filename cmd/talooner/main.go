@@ -247,7 +247,7 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer, gh on
 		printf(stdout, "set secret %s\n", s.name)
 	}
 
-	printf(stdout, "%s is wired up — commit the workflow and ruleset, then comment `@talooner /review` on a PR\n", *repo)
+	printf(stdout, "%s is wired up — commit the workflow and ruleset, then comment `!talooner /review` on a PR\n", *repo)
 	return 0
 }
 

@@ -14,7 +14,7 @@ func TestParseIssueCommentOnPullRequest(t *testing.T) {
 	  "repository": {"full_name": "opentalon/talooner"},
 	  "sender": {"login": "zhisme"},
 	  "issue": {"number": 42, "pull_request": {"url": "https://api.github.com/repos/opentalon/talooner/pulls/42"}},
-	  "comment": {"id": 987, "body": "@talooner /review"}
+	  "comment": {"id": 987, "body": "!talooner /review"}
 	}`
 
 	ev, err := Parse(TriggerIssueComment, strings.NewReader(body))
@@ -30,7 +30,7 @@ func TestParseIssueCommentOnPullRequest(t *testing.T) {
 	if ev.Actor != "zhisme" {
 		t.Errorf("Actor = %q, want zhisme", ev.Actor)
 	}
-	if ev.CommentBody != "@talooner /review" || ev.CommentID != 987 {
+	if ev.CommentBody != "!talooner /review" || ev.CommentID != 987 {
 		t.Errorf("comment = %d %q", ev.CommentID, ev.CommentBody)
 	}
 	// issue_comment carries no head sha; the caller must fetch it.
@@ -130,7 +130,7 @@ func TestParseSkips(t *testing.T) {
 			body: `{"action":"created",
 			        "repository":{"full_name":"opentalon/talooner"},
 			        "issue":{"number":5},
-			        "comment":{"id":1,"body":"@talooner /review"}}`,
+			        "comment":{"id":1,"body":"!talooner /review"}}`,
 			want: ErrNotPullRequest,
 		},
 		{
@@ -139,7 +139,7 @@ func TestParseSkips(t *testing.T) {
 			body: `{"action":"edited",
 			        "repository":{"full_name":"opentalon/talooner"},
 			        "issue":{"number":5,"pull_request":{"url":"u"}},
-			        "comment":{"id":1,"body":"@talooner /review"}}`,
+			        "comment":{"id":1,"body":"!talooner /review"}}`,
 			want: ErrUnhandled,
 		},
 		{
@@ -257,7 +257,7 @@ func TestFromEnv(t *testing.T) {
 	          "repository":{"full_name":"opentalon/talooner"},
 	          "sender":{"login":"zhisme"},
 	          "issue":{"number":42,"pull_request":{"url":"u"}},
-	          "comment":{"id":1,"body":"@talooner /review"}}`
+	          "comment":{"id":1,"body":"!talooner /review"}}`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

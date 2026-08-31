@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   review:
-    if: github.event_name != 'issue_comment' || startsWith(github.event.comment.body, '@talooner')
+    if: github.event_name != 'issue_comment' || startsWith(github.event.comment.body, '!talooner')
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write

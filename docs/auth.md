@@ -81,7 +81,7 @@ The load-bearing rule:
 `pull_request_target` is the standard footgun: it runs with secrets against a
 fork's PR ref. Talooner does not use it, and no reference workflow will suggest
 it. The only trigger that carries credentials for fork PRs is
-`issue_comment` — a maintainer typing `@talooner /review`, whose write access is
+`issue_comment` — a maintainer typing `!talooner /review`, whose write access is
 then verified against the API before anything else happens.
 
 Because `issue_comment` runs the workflow from the **default branch**, not the
@@ -170,10 +170,11 @@ check run. Talooner does not register a GitHub App, so there is no display name
 to choose, no globally unique name to claim, and no collision between two orgs
 running it — the problem a per-tenant App would have created.
 
-The handle in comments is still `@talooner`, but it is **not** a GitHub mention:
-it's a plain string the action matches in the comment body, filtered cheaply by
-the workflow's `if:` before a runner even starts. Tenants can change it in
-`config.yaml`; nothing on GitHub's side cares.
+The handle in comments is `!talooner` — a bang, not an `@`, precisely because
+it is **not** a GitHub mention: it's a plain string the action matches in the
+comment body, filtered cheaply by the workflow's `if:` before a runner even
+starts. An `@` would imply autocomplete and a notification that don't exist.
+Tenants can change it in `config.yaml`; nothing on GitHub's side cares.
 
 Recognisability comes from the action reference — `uses: opentalon/talooner@v1` —
 and from the check-run name, `talooner`, which is what appears in the PR's checks

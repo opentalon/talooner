@@ -206,10 +206,10 @@ if reintroduced carelessly:
 ## Part 4 — run it
 
 ```bash
-gh pr comment <n> --repo <owner/name> --body "@talooner /review"
+gh pr comment <n> --repo <owner/name> --body "!talooner /review"
 ```
 
-`@talooner` is a plain string match in the workflow's `if:` condition, not a
+`!talooner` is a plain string match in the workflow's `if:` condition, not a
 GitHub mention — no GitHub user or App named `talooner` needs to exist for
 this to work. Expect one `talooner` check run and one sticky comment on the
 PR, updated in place (never duplicated) on every push and re-trigger.
