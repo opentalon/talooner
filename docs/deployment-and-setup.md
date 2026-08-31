@@ -139,23 +139,21 @@ cd <local clone of the target repo>
 talooner onboard --repo <owner/name>
 ```
 
-`onboard` writes `.github/talooner/rules.tln` and `.github/talooner/rules.tln.test`,
-then commits, pushes, and opens a PR — nothing lands on the default branch
-without review. It does not yet write `.github/workflows/talooner.yml`; add
-that file by hand for now (template below), and commit it in the same PR or
-a follow-up.
+`onboard` writes `.github/workflows/talooner.yml`, `.github/talooner/rules.tln`,
+and `.github/talooner/rules.tln.test`, then commits, pushes, and opens a PR —
+nothing lands on the default branch without review.
 
-### Hand-fixes needed on top of `init`/`onboard`
+### Hand-fixes needed on top of `onboard`
 
-**1. The workflow file itself.** Neither `init` nor `onboard` writes
-`.github/workflows/talooner.yml` yet. Add one by hand, pinning
-`uses: opentalon/talooner@<tag>` to a real published tag — **`v1` does not
-exist yet** (check `git tag --list` in `talooner` — currently
+**1. The action pin.** `onboard`'s workflow template pins
+`uses: opentalon/talooner@v1` — **`v1` does not exist as a tag yet.** Until a
+real `vX.Y.Z` release is cut, edit `.github/workflows/talooner.yml` to pin a
+real published tag instead (check `git tag --list` in `talooner` — currently
 `v0.0.1-alpha2`, or newer) or a commit sha off `master`. This has to be
 bumped by hand for every new prerelease until `v1` exists; nothing tracks it
 automatically.
 
-**2. `.github/talooner/config.yaml` — not written by `init` or `onboard`.**
+**2. `.github/talooner/config.yaml` — not written by `onboard`.**
 Without it, `pr.tests_passing` and `pr.lint_passing` are never set (they
 require the tenant to declare which CI check names to match), so any rule
 conditioned on them silently never fires. Add it by hand, naming your repo's

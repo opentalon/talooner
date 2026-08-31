@@ -114,6 +114,14 @@ func TestOnboardLLMPathHappyPath(t *testing.T) {
 		t.Errorf("ruleset = %q, want the generated one", rulesetBytes)
 	}
 
+	workflowBytes, err := os.ReadFile(onboard.WorkflowPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", onboard.WorkflowPath, err)
+	}
+	if !bytes.Equal(workflowBytes, onboard.Workflow) {
+		t.Error("workflow file = not the starter template")
+	}
+
 	if len(git.calls) != 5 {
 		t.Fatalf("git calls = %v, want 5 (show-ref master, checkout, add, commit, push)", git.calls)
 	}
