@@ -94,9 +94,14 @@ func TestInitHappyPathWritesFilesAndSetsSecrets(t *testing.T) {
 		t.Error("API key leaked into stdout/stderr")
 	}
 
-	for _, path := range []string{onboard.WorkflowPath, onboard.RulesetPath, onboard.RulesetTestPath} {
-		if _, err := os.Stat(path); err != nil {
-			t.Errorf("expected %s to exist: %v", path, err)
+	if _, err := os.Stat(onboard.WorkflowPath); err != nil {
+		t.Errorf("expected %s to exist: %v", onboard.WorkflowPath, err)
+	}
+	// init no longer writes a ruleset — `talooner onboard` owns that, since a
+	// repo-shaped ruleset needs to investigate the repo first.
+	for _, path := range []string{onboard.RulesetPath, onboard.RulesetTestPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("expected %s NOT to exist after init, got err=%v", path, err)
 		}
 	}
 

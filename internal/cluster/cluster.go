@@ -84,6 +84,12 @@ const (
 	// provider configured. A ruleset using llm_review without it is a warning at
 	// load time, not a failure on the first PR.
 	FeatureLLMReview = "llm_review"
+
+	// FeatureGenerateRuleset is the whoami feature that says the cluster can
+	// scaffold a ruleset via generate_ruleset. Its absence isn't fatal either —
+	// the plugin reports source: "fallback" and `onboard` supplies its own
+	// starter, so there's nothing to warn about at dial time.
+	FeatureGenerateRuleset = "generate_ruleset"
 )
 
 // Protocol versions, both directions of the skew.

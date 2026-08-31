@@ -87,21 +87,34 @@ func runRulesValidate(ctx context.Context, args []string, stdout, stderr io.Writ
 	}
 	defer client.Close() //nolint:errcheck // best-effort on the way out of a one-shot command
 
-	resp, err := client.ValidateRuleset(ctx, string(src))
-	if err != nil {
-		printf(stderr, "talooner rules validate: %v\n", err)
+	if !validateAndPrint(ctx, client, "talooner rules validate", path, string(src), stdout, stderr) {
 		return 1
 	}
+	return 0
+}
 
+// validateAndPrint round-trips src to the cluster's validate_ruleset action
+// and prints diagnostics/result the way `rules validate` always has —
+// factored out so `talooner onboard` can run the identical verification
+// step against a freshly generated ruleset without a second copy of this
+// dial-and-print logic. cmd prefixes error lines (e.g. "talooner rules
+// validate" or "talooner onboard") so output reads like it came from
+// whichever command actually called it.
+func validateAndPrint(ctx context.Context, client *cluster.Client, cmd, path, src string, stdout, stderr io.Writer) bool {
+	resp, err := client.ValidateRuleset(ctx, src)
+	if err != nil {
+		printf(stderr, "%s: %v\n", cmd, err)
+		return false
+	}
 	for _, d := range resp.GetDiagnostics() {
 		printf(stderr, "%s: %s\n", diagnosticPosition(path, d), strings.TrimSpace(d.GetMessage()))
 	}
 	if !resp.GetValid() {
-		printf(stderr, "talooner rules validate: %s is not valid\n", path)
-		return 1
+		printf(stderr, "%s: %s is not valid\n", cmd, path)
+		return false
 	}
 	printf(stdout, "%s is valid\n", path)
-	return 0
+	return true
 }
 
 // runRulesTest runs a tenant's rules.tln.test against rules.tln, round-tripped
@@ -156,10 +169,20 @@ func runRulesTest(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	}
 	defer client.Close() //nolint:errcheck // best-effort on the way out of a one-shot command
 
-	resp, err := client.RunRulesetTest(ctx, string(src), string(testSrc))
-	if err != nil {
-		printf(stderr, "talooner rules test: %v\n", err)
+	if !testAndPrint(ctx, client, "talooner rules test", rulesetPath, string(src), string(testSrc), stdout, stderr) {
 		return 1
+	}
+	return 0
+}
+
+// testAndPrint round-trips src/testSrc to the cluster's run_ruleset_test
+// action and prints results the way `rules test` always has — factored out
+// for the same reason validateAndPrint is (see its doc comment).
+func testAndPrint(ctx context.Context, client *cluster.Client, cmd, rulesetPath, src, testSrc string, stdout, stderr io.Writer) bool {
+	resp, err := client.RunRulesetTest(ctx, src, testSrc)
+	if err != nil {
+		printf(stderr, "%s: %v\n", cmd, err)
+		return false
 	}
 
 	// The plugin's Diagnostic has no file field on the wire (talooner-plugin's
@@ -171,8 +194,8 @@ func runRulesTest(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		for _, d := range resp.GetDiagnostics() {
 			printf(stderr, "%s: %s\n", testDiagnosticPosition(d), strings.TrimSpace(d.GetMessage()))
 		}
-		printf(stderr, "talooner rules test: %s did not compile\n", rulesetPath)
-		return 1
+		printf(stderr, "%s: %s did not compile\n", cmd, rulesetPath)
+		return false
 	}
 
 	failed := 0
@@ -188,11 +211,11 @@ func runRulesTest(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		}
 	}
 	if failed > 0 {
-		printf(stderr, "talooner rules test: %d/%d tests failed\n", failed, len(resp.GetResults()))
-		return 1
+		printf(stderr, "%s: %d/%d tests failed\n", cmd, failed, len(resp.GetResults()))
+		return false
 	}
 	printf(stdout, "%d/%d tests passed\n", len(resp.GetResults()), len(resp.GetResults()))
-	return 0
+	return true
 }
 
 // runRulesPlan runs a live PR's base-branch ruleset in plan mode and prints
