@@ -29,7 +29,7 @@ const usage = `talooner is the operator CLI for a self-hosted Talooner deploymen
 Usage:
   talooner cluster login --url <host> --key <api-key>
   talooner cluster whoami
-  talooner init --repo <owner/name> [--org <org>] [--force]
+  talooner init --repo <owner/name> [--org <org>]
   talooner onboard --repo <owner/name> [--base <branch>] [--branch <branch>] [--force] [--no-pr]
   talooner rules validate <path-to-.github/talooner>
   talooner rules test <path-to-.github/talooner>
@@ -166,20 +166,19 @@ func runClusterWhoami(ctx context.Context, args []string, stdout, stderr io.Writ
 	return 0
 }
 
-// runInit is the GitHub-side plumbing install (auth.md, "Onboarding"): a
-// workflow file and the two secrets it reads. It writes local files before
-// touching GitHub, so a maintainer can always see exactly what changed with
-// `git diff` before it's pushed. It writes no ruleset — `talooner onboard`
-// owns scaffolding rules.tln/rules.tln.test, since a repo-shaped ruleset
-// needs to investigate the repo first. gh is the gh CLI wrapper — a real
-// onboard.GH{} from main, a fake from tests, so the test suite never shells
-// out to a real gh binary.
+// runInit sets the two secrets `talooner onboard`'s workflow needs
+// (OPENTALON_HOST, OPENTALON_API_KEY) on the target repo — nothing else.
+// It writes no local files and touches no git: it works purely against the
+// GitHub API via gh, so it doesn't need to run inside a checkout of --repo
+// at all. Workflow file, ruleset, and PR are all `talooner onboard`'s job,
+// since a repo-shaped ruleset needs to investigate the repo first. gh is the
+// gh CLI wrapper — a real onboard.GH{} from main, a fake from tests, so the
+// test suite never shells out to a real gh binary.
 func runInit(ctx context.Context, args []string, stdout, stderr io.Writer, gh onboard.Runner) int {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	repo := fs.String("repo", "", "repo to onboard, as owner/name")
 	org := fs.String("org", "", "set secrets at the org level instead of the repo level")
-	force := fs.Bool("force", false, "overwrite an existing workflow or ruleset file that differs from the starter")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -200,22 +199,6 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer, gh on
 	}
 	if err != nil {
 		printf(stderr, "talooner init: %v\n", err)
-		return 1
-	}
-
-	outcome, diff, err := onboard.WriteFile(onboard.WorkflowPath, onboard.Workflow, *force)
-	if err != nil {
-		printf(stderr, "talooner init: writing %s: %v\n", onboard.WorkflowPath, err)
-		return 1
-	}
-	switch outcome {
-	case onboard.Created:
-		printf(stdout, "wrote %s\n", onboard.WorkflowPath)
-	case onboard.Unchanged:
-		printf(stdout, "%s already up to date\n", onboard.WorkflowPath)
-	case onboard.Conflict:
-		printf(stderr, "talooner init: %s already exists and differs from the starter:\n\n%s\n"+
-			"rerun with --force to overwrite it\n", onboard.WorkflowPath, diff)
 		return 1
 	}
 
@@ -242,7 +225,7 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer, gh on
 		printf(stdout, "set secret %s\n", s.name)
 	}
 
-	printf(stdout, "%s is wired up — commit the workflow, then run `talooner onboard --repo %s` to scaffold a ruleset\n", *repo, *repo)
+	printf(stdout, "secrets set on %s — run `talooner onboard --repo %s` to scaffold a ruleset and open a PR\n", *repo, *repo)
 	return 0
 }
 
