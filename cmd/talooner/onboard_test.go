@@ -99,7 +99,10 @@ func TestOnboardLLMPathHappyPath(t *testing.T) {
 	seedRulesCreds(t, host)
 	t.Chdir(t.TempDir())
 
-	gh, git := &fakeGH{}, &fakeGit{}
+	gh := &fakeGH{}
+	git := &fakeGit{fail: map[string]error{
+		"show-ref --verify --quiet refs/heads/talooner-onboarding": errors.New("not a valid ref"),
+	}}
 	var out, errw bytes.Buffer
 	code := runOnboard(context.Background(), []string{"--repo", "acme/api"}, &out, &errw, gh, git)
 	if code != 0 {
@@ -122,17 +125,20 @@ func TestOnboardLLMPathHappyPath(t *testing.T) {
 		t.Error("workflow file = not the starter template")
 	}
 
-	if len(git.calls) != 5 {
-		t.Fatalf("git calls = %v, want 5 (show-ref master, checkout, add, commit, push)", git.calls)
+	if len(git.calls) != 6 {
+		t.Fatalf("git calls = %v, want 6 (show-ref master, show-ref branch, checkout, add, commit, push)", git.calls)
 	}
 	if git.calls[0][0] != "show-ref" {
 		t.Errorf("first git call = %v, want show-ref (base auto-detect)", git.calls[0])
 	}
-	if git.calls[1][0] != "checkout" || !containsArg(git.calls[1], "master") {
-		t.Errorf("second git call = %v, want checkout onto master (auto-detected)", git.calls[1])
+	if git.calls[1][0] != "show-ref" {
+		t.Errorf("second git call = %v, want show-ref (branch-exists check)", git.calls[1])
 	}
-	if git.calls[4][0] != "push" {
-		t.Errorf("last git call = %v, want push", git.calls[4])
+	if git.calls[2][0] != "checkout" || !containsArg(git.calls[2], "master") {
+		t.Errorf("third git call = %v, want checkout onto master (auto-detected)", git.calls[2])
+	}
+	if git.calls[5][0] != "push" {
+		t.Errorf("last git call = %v, want push", git.calls[5])
 	}
 
 	foundPRCreate := false
@@ -163,15 +169,16 @@ func TestOnboardBaseFallsBackToMainWhenNoMaster(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	git := &fakeGit{fail: map[string]error{
-		"show-ref --verify --quiet refs/heads/master": errors.New("not a valid ref"),
+		"show-ref --verify --quiet refs/heads/master":              errors.New("not a valid ref"),
+		"show-ref --verify --quiet refs/heads/talooner-onboarding": errors.New("not a valid ref"),
 	}}
 	var out, errw bytes.Buffer
 	code := runOnboard(context.Background(), []string{"--repo", "acme/api"}, &out, &errw, &fakeGH{}, git)
 	if code != 0 {
 		t.Fatalf("code = %d, stderr = %q", code, errw.String())
 	}
-	if !containsArg(git.calls[2], "main") {
-		t.Errorf("checkout call = %v, want it to cut from main", git.calls[2])
+	if !containsArg(git.calls[3], "main") {
+		t.Errorf("checkout call = %v, want it to cut from main", git.calls[3])
 	}
 }
 
@@ -220,17 +227,54 @@ func TestOnboardExplicitBaseSkipsAutoDetect(t *testing.T) {
 	seedRulesCreds(t, host)
 	t.Chdir(t.TempDir())
 
-	git := &fakeGit{}
+	git := &fakeGit{fail: map[string]error{
+		"show-ref --verify --quiet refs/heads/talooner-onboarding": errors.New("not a valid ref"),
+	}}
 	var out, errw bytes.Buffer
 	code := runOnboard(context.Background(), []string{"--repo", "acme/api", "--base", "develop"}, &out, &errw, &fakeGH{}, git)
 	if code != 0 {
 		t.Fatalf("code = %d, stderr = %q", code, errw.String())
 	}
-	if len(git.calls) == 0 || git.calls[0][0] != "checkout" {
-		t.Fatalf("git calls = %v, want checkout first — an explicit --base should skip auto-detect entirely", git.calls)
+	if len(git.calls) < 2 || git.calls[0][0] != "show-ref" || git.calls[1][0] != "checkout" {
+		t.Fatalf("git calls = %v, want show-ref (branch-exists check) then checkout — an explicit --base should skip base auto-detect but still check the target branch", git.calls)
 	}
-	if !containsArg(git.calls[0], "develop") {
-		t.Errorf("checkout call = %v, want it to cut from develop", git.calls[0])
+	if !containsArg(git.calls[1], "develop") {
+		t.Errorf("checkout call = %v, want it to cut from develop", git.calls[1])
+	}
+}
+
+func TestOnboardExistingBranchSuggestsClosingPR(t *testing.T) {
+	withHome(t)
+	f := routedOnboardFake(t, map[string]func(*pluginpb.ToolCallRequest) *pluginpb.ToolResultResponse{
+		"generate_ruleset": structured(t, &taloonerpb.GenerateRulesetResponse{
+			Ruleset: `rule "x" {}`, RulesetTest: `test "y" {}`, Source: "llm",
+		}),
+		"validate_ruleset": passingValidate(t),
+		"run_ruleset_test": passingTest(t),
+	})
+	host := serve(t, f)
+	seedRulesCreds(t, host)
+	t.Chdir(t.TempDir())
+
+	// fakeGit succeeds on every show-ref by default, so the target branch
+	// looks like it already exists locally — the state left behind by a
+	// previous onboarding run whose PR is still open.
+	git := &fakeGit{}
+	var out, errw bytes.Buffer
+	code := runOnboard(context.Background(), []string{"--repo", "acme/api"}, &out, &errw, &fakeGH{}, git)
+	if code != 1 {
+		t.Fatalf("code = %d, want 1", code)
+	}
+	if !strings.Contains(errw.String(), "talooner-onboarding") {
+		t.Errorf("stderr = %q, want it to name the branch", errw.String())
+	}
+	if !strings.Contains(errw.String(), "gh pr list") {
+		t.Errorf("stderr = %q, want it to suggest checking for an existing PR", errw.String())
+	}
+	for _, call := range git.calls {
+		if call[0] == "checkout" || call[0] == "push" {
+			t.Errorf("git calls = %v, want no checkout/push when the branch already exists", git.calls)
+		}
 	}
 }
 
