@@ -148,7 +148,7 @@ talooner cluster whoami
 talooner init --repo acme/api
 #   → gh secret set OPENTALON_HOST / OPENTALON_API_KEY   (repo-scoped, or --org)
 
-# 3. scaffold a repo-shaped ruleset, open a PR
+# 3. scaffold the workflow + a repo-shaped ruleset, open a PR
 talooner onboard --repo acme/api
 
 # 4. author and validate rules — all local, no cluster writes
@@ -159,10 +159,8 @@ talooner rules plan --repo acme/api --pr 42   # dry-run against a live PR
 
 There is no `talooner serve`. `init` only sets secrets via the GitHub API — it
 writes no local files and doesn't need to run inside a checkout of the repo.
-`onboard` writes a generated ruleset, then commits, pushes, and opens a PR so
-a maintainer reviews the diff before anything runs — it does not yet write
-`.github/workflows/talooner.yml`; add that by hand until it does (see
-`deployment-and-setup.md`).
+`onboard` writes the workflow and a generated ruleset, then commits, pushes,
+and opens a PR so a maintainer reviews the diff before anything runs.
 
 Secrets can be set org-wide instead of per repo (`talooner init --org acme`),
 which is the sane setup for more than a couple of repos — then onboarding a new

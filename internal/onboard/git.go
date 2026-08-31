@@ -55,9 +55,13 @@ func CreateBranch(ctx context.Context, r Runner, branch, base string) error {
 
 // CommitAndPush stages exactly paths (never a broad `git add .`, so onboard
 // can never sweep up unrelated working-tree changes), commits, and pushes
-// the branch upstream.
+// the branch upstream. Staging uses -f: paths are always onboard's own known
+// generated files, never caller input, and a Go repo's boilerplate .gitignore
+// almost always has `*.test` for compiled test binaries — a pattern that also
+// matches rules.tln.test's extension. Without -f, `git add` silently refuses
+// and the whole commit fails on a repo that never touched talooner.
 func CommitAndPush(ctx context.Context, r Runner, branch, message string, paths []string) error {
-	args := append([]string{"add", "--"}, paths...)
+	args := append([]string{"add", "-f", "--"}, paths...)
 	if _, err := r.Run(ctx, "", args...); err != nil {
 		return fmt.Errorf("stage %v: %w", paths, err)
 	}

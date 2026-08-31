@@ -22,14 +22,14 @@ import (
 // guessed at with a single hardcoded name.
 const defaultOnboardBranch = "talooner-onboarding"
 
-// runOnboard investigates the repo it's run in, asks the cluster to
-// scaffold a rules.tln + rules.tln.test pair via generate_ruleset (falling
-// back to onboard's static starter when the plugin reports source ==
-// "fallback"), verifies the pair through the same validate/test round-trip
-// `talooner rules validate`/`talooner rules test` use, and — unless --no-pr
-// — commits, pushes, and opens a PR titled "talooner onboarding". It writes
-// local files before touching git, same as `init`, so a maintainer can
-// always `git diff` before anything is pushed.
+// runOnboard writes the workflow file, investigates the repo it's run in,
+// asks the cluster to scaffold a rules.tln + rules.tln.test pair via
+// generate_ruleset (falling back to onboard's static starter when the
+// plugin reports source == "fallback"), verifies the pair through the same
+// validate/test round-trip `talooner rules validate`/`talooner rules test`
+// use, and — unless --no-pr — commits, pushes, and opens a PR titled
+// "talooner onboarding". It writes local files before touching git, so a
+// maintainer can always `git diff` before anything is pushed.
 func runOnboard(ctx context.Context, args []string, stdout, stderr io.Writer, gh, git onboard.Runner) int {
 	fs := flag.NewFlagSet("onboard", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -93,6 +93,7 @@ func runOnboard(ctx context.Context, args []string, stdout, stderr io.Writer, gh
 		path    string
 		content []byte
 	}{
+		{onboard.WorkflowPath, onboard.Workflow},
 		{onboard.RulesetPath, []byte(rulesetSrc)},
 		{onboard.RulesetTestPath, []byte(testSrc)},
 	}
@@ -136,8 +137,8 @@ func runOnboard(ctx context.Context, args []string, stdout, stderr io.Writer, gh
 		printf(stderr, "talooner onboard: %v\n", err)
 		return 1
 	}
-	commitMsg := "Add Talooner ruleset (talooner onboarding)"
-	if err := onboard.CommitAndPush(ctx, git, *branch, commitMsg, []string{onboard.RulesetPath, onboard.RulesetTestPath}); err != nil {
+	commitMsg := "Add Talooner workflow and ruleset (talooner onboarding)"
+	if err := onboard.CommitAndPush(ctx, git, *branch, commitMsg, []string{onboard.WorkflowPath, onboard.RulesetPath, onboard.RulesetTestPath}); err != nil {
 		printf(stderr, "talooner onboard: %v\n", err)
 		return 1
 	}

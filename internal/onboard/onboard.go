@@ -11,9 +11,8 @@ import (
 	"path/filepath"
 )
 
-// Workflow is not yet written by anything — `init` only sets secrets, and
-// `onboard` only scaffolds the ruleset. It's here for the workflow file to
-// land in once `onboard` grows the step that writes it.
+// Workflow is `talooner onboard`'s workflow file — `init` only sets secrets,
+// it writes no local files.
 //
 //go:embed templates/talooner.yml
 var Workflow []byte
@@ -29,12 +28,11 @@ var Ruleset []byte
 //go:embed templates/rules.tln.test
 var RulesetTest []byte
 
-// WorkflowPath is where the workflow file will be written once something
-// writes it. RulesetPath and RulesetTestPath are where `onboard` writes the
-// generated (or fallback) ruleset — the same paths internal/run reads at
-// runtime (RulesetPath there is the canonical source; this package doesn't
-// import internal/run to avoid a dependency edge from onboarding back into
-// the run loop).
+// WorkflowPath, RulesetPath, and RulesetTestPath are where `onboard` writes
+// the workflow file and the generated (or fallback) ruleset — the same
+// ruleset paths internal/run reads at runtime (RulesetPath there is the
+// canonical source; this package doesn't import internal/run to avoid a
+// dependency edge from onboarding back into the run loop).
 const (
 	WorkflowPath    = ".github/workflows/talooner.yml"
 	RulesetPath     = ".github/talooner/rules.tln"
