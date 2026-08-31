@@ -2,7 +2,7 @@
 // allowed to run one.
 //
 // The write-access gate is the reason this is its own package. Without it any
-// GitHub account could comment `@talooner /review` on a public repo and spend
+// GitHub account could comment `!talooner /review` on a public repo and spend
 // the maintainer's LLM budget (actions.md, "Workflow permissions").
 //
 // Callers run the two halves in this order:
@@ -28,7 +28,7 @@ import (
 // DefaultHandle is the string Talooner answers to. It is not a GitHub mention,
 // just a string matched in the body; tenants can change it in config.yaml
 // (auth.md, "Identity").
-const DefaultHandle = "@talooner"
+const DefaultHandle = "!talooner"
 
 // The verbs Talooner serves (architecture.md, "Commands").
 const (
@@ -81,7 +81,7 @@ func Usage(handle string) string {
 // Parse finds the first command in a comment body.
 //
 // A command is a line that *starts* with the handle: leading whitespace is
-// allowed but nothing else. That is what keeps `as @talooner /review would say`
+// allowed but nothing else. That is what keeps `as !talooner /review would say`
 // and a quoted copy of someone else's comment from re-invoking the bot. Lines
 // inside a fenced code block, inside a blockquote, or indented four columns
 // (markdown's own code-block rule) are skipped for the same reason.

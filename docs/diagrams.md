@@ -35,7 +35,7 @@ Two notation decisions worth knowing before someone "fixes" them:
 | 0 | System context (C4 L1) | Who uses it, what it touches, who pays |
 | 1 | Containers (C4 L2) | What runs where inside the boundary |
 | 2a | Components (C4 L3) | The bot's internals; the plugin's are in `talooner-plugin/docs/diagrams.md` §2 |
-| 3 | `@talooner /review` flow | The v1 happy path, end to end |
+| 3 | `!talooner /review` flow | The v1 happy path, end to end |
 | 4 | Re-evaluation on push | Reactive rules, and retraction |
 | 5 | `llm_review` | Why there's no cache layer, and where determinism comes from |
 | 6 | Fork PRs | Which ruleset governs writes |
@@ -66,7 +66,7 @@ flowchart TB
     LLM["<b>LLM provider</b><br/>consulted only when a rule<br/>fires llm_review · your account"]
     CI["<b>Your CI</b><br/>preview builds · scans<br/>reports results back as facts"]
 
-    DEV -->|"@talooner /review"| GH
+    DEV -->|"!talooner /review"| GH
     CONTRIB -->|"opens PRs"| GH
     GH -->|"Actions run:<br/>facts out, actions in"| TAL
     TAL -->|"reviews · comments<br/>check runs<br/><i>via the runner</i>"| GH
@@ -202,7 +202,7 @@ into API calls. Consequences worth stating to the team —
 
 ---
 
-## 3. Flow — `@talooner /review`
+## 3. Flow — `!talooner /review`
 
 The v1 entry point. Nothing happens until a human asks.
 
@@ -215,8 +215,8 @@ sequenceDiagram
     participant Plug as talooner-plugin
     participant DB as tln-db
 
-    Dev->>GH: comment "@talooner /review"
-    GH->>GH: workflow `if:` — body starts with @talooner?
+    Dev->>GH: comment "!talooner /review"
+    GH->>GH: workflow `if:` — body starts with !talooner?
     Note over GH: cheap filter — no runner starts<br/>for ordinary comments
     GH->>Bot: start job, mint GITHUB_TOKEN
     Note over Bot: fresh container, ~10–30s cold start.<br/>Secrets present: issue_comment runs<br/>in base repo context
@@ -354,7 +354,7 @@ edits the ruleset gets a read-only plan run instead.
 
 ```mermaid
 flowchart TB
-    START["PR opened, maintainer runs<br/>@talooner /review"] --> FORK{"Does this PR modify<br/>.github/talooner/ ?"}
+    START["PR opened, maintainer runs<br/>!talooner /review"] --> FORK{"Does this PR modify<br/>.github/talooner/ ?"}
 
     FORK -->|"no"| NORM["Load ruleset from BASE branch"]
     NORM --> EVAL["Evaluate"]
@@ -392,16 +392,16 @@ stay reviewable.
 stateDiagram-v2
     [*] --> Unwatched: PR opened
 
-    Unwatched --> Subscribed: "@talooner /review" — write access required
+    Unwatched --> Subscribed: "!talooner /review" — write access required
     Unwatched --> Unwatched: push or check completes — job exits 0
 
-    Subscribed --> Subscribed: "@talooner /review" — full re-evaluation
-    Subscribed --> Subscribed: "@talooner /review --force" — also busts llm cache
+    Subscribed --> Subscribed: "!talooner /review" — full re-evaluation
+    Subscribed --> Subscribed: "!talooner /review --force" — also busts llm cache
     Subscribed --> Subscribed: push — full re-evaluation
     Subscribed --> Subscribed: check_suite completed — re-evaluate
     Subscribed --> Subscribed: review submitted — review.* facts
 
-    Subscribed --> Unwatched: "@talooner /stop"
+    Subscribed --> Unwatched: "!talooner /stop"
     Subscribed --> Closed: PR closed or merged
 
     Closed --> [*]: facts expire after retention

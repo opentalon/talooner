@@ -43,7 +43,7 @@ violates encoded knowledge, and stays silent when the PR is legitimate.
 ## Architecture
 
 ```
-GitHub PR event (opened / synchronize / @talooner /review)
+GitHub PR event (opened / synchronize / !talooner /review)
         │
         ▼
 talooner (bot / GitHub Action)
@@ -85,7 +85,7 @@ talooner renders the report
 
 ```mermaid
 flowchart TD
-    EVT["GitHub PR event<br/>opened / synchronize / @talooner /review"]
+    EVT["GitHub PR event<br/>opened / synchronize / !talooner /review"]
 
     subgraph BOT["talooner (bot / GitHub Action)<br/>holds GitHub token — never an LLM key"]
         direction TB

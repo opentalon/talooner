@@ -628,7 +628,7 @@ func TestReviewCommandRunsTheWholeSpine(t *testing.T) {
 	})}
 	gh := &fakeGitHub{}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -676,7 +676,7 @@ func TestCodeUnitsOmittedWithoutArchitectureYaml(t *testing.T) {
 	f := &fakeCluster{answers: evaluated(&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_APPROVE, Target: "pr"})}
 	gh := &fakeGitHub{} // no architecture.yaml, and no docs/services/auth.md stubbed either
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -703,7 +703,7 @@ func TestCodeUnitsSentWithDocContentWhenArchitectureYamlPresent(t *testing.T) {
 		docs:         map[string]string{"docs/services/auth.md": "auth must hash passwords, never log them"},
 	}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -742,7 +742,7 @@ func TestMissingCodeUnitDocWarnsButDoesNotFailTheRun(t *testing.T) {
 	f := &fakeCluster{answers: evaluated(&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_APPROVE, Target: "pr"})}
 	gh := &fakeGitHub{architecture: "- path: unrelated/\n  kind: service\n"} // opted in, no docs/services/auth.md stubbed
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -771,7 +771,7 @@ func TestBlockWritesAFailingCheckRun(t *testing.T) {
 	})}
 	gh := &fakeGitHub{}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	got := gh.check(t)
@@ -794,7 +794,7 @@ func TestASecondRunUpdatesTheSameCheckRun(t *testing.T) {
 	})}
 	gh := &fakeGitHub{checkRunID: 4242}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	got := gh.check(t)
@@ -812,7 +812,7 @@ func TestNoActionsStillWritesACheckRun(t *testing.T) {
 	f := &fakeCluster{answers: evaluated()}
 	gh := &fakeGitHub{}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := gh.check(t); got.Conclusion != github.ConclusionSuccess {
@@ -827,7 +827,7 @@ func TestMissingRulesetWritesNoCheckRun(t *testing.T) {
 	f := &fakeCluster{answers: evaluated()}
 	gh := &fakeGitHub{noRuleset: true}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if len(gh.checks) != 0 {
@@ -851,7 +851,7 @@ func TestConfigRead(t *testing.T) {
 		gh := &fakeGitHub{config: "checks:\n  tests: [\"test\"]\n  lint: [\"lint\"]\n"}
 
 		if err := Run(t.Context(), Runner{
-			Event:   commentEvent("@talooner /review"),
+			Event:   commentEvent("!talooner /review"),
 			GitHub:  gh.client(t),
 			Cluster: dialFake(t, f),
 		}); err != nil {
@@ -864,7 +864,7 @@ func TestConfigRead(t *testing.T) {
 		gh := &fakeGitHub{config: "checks: [\n"}
 
 		err := Run(t.Context(), Runner{
-			Event:   commentEvent("@talooner /review"),
+			Event:   commentEvent("!talooner /review"),
 			GitHub:  gh.client(t),
 			Cluster: dialFake(t, f),
 		})
@@ -885,7 +885,7 @@ func TestConfigRead(t *testing.T) {
 		gh := &fakeGitHub{config: "checks:\n  tests: [\"test\"]\napi_key: xyz\n"}
 
 		err := Run(t.Context(), Runner{
-			Event:   commentEvent("@talooner /review"),
+			Event:   commentEvent("!talooner /review"),
 			GitHub:  gh.client(t),
 			Cluster: dialFake(t, f),
 		})
@@ -906,7 +906,7 @@ func TestModuleFacts(t *testing.T) {
 		gh := &fakeGitHub{modules: modules}
 
 		if err := Run(t.Context(), Runner{
-			Event:   commentEvent("@talooner /review"),
+			Event:   commentEvent("!talooner /review"),
 			GitHub:  gh.client(t),
 			Cluster: dialFake(t, f),
 		}); err != nil {
@@ -936,7 +936,7 @@ func TestModuleFacts(t *testing.T) {
 		gh := &fakeGitHub{}
 
 		if err := Run(t.Context(), Runner{
-			Event:   commentEvent("@talooner /review"),
+			Event:   commentEvent("!talooner /review"),
 			GitHub:  gh.client(t),
 			Cluster: dialFake(t, f),
 		}); err != nil {
@@ -961,7 +961,7 @@ func TestModuleFacts(t *testing.T) {
 		gh := &fakeGitHub{modules: "path: [\n"}
 
 		err := Run(t.Context(), Runner{
-			Event:   commentEvent("@talooner /review"),
+			Event:   commentEvent("!talooner /review"),
 			GitHub:  gh.client(t),
 			Cluster: dialFake(t, f),
 		})
@@ -982,7 +982,7 @@ func TestModuleFacts(t *testing.T) {
 		gh := &fakeGitHub{modules: "- path: ../../etc\n"}
 
 		err := Run(t.Context(), Runner{
-			Event:   commentEvent("@talooner /review"),
+			Event:   commentEvent("!talooner /review"),
 			GitHub:  gh.client(t),
 			Cluster: dialFake(t, f),
 		})
@@ -1002,7 +1002,7 @@ func TestReviewFacts(t *testing.T) {
 		}}
 
 		if err := Run(t.Context(), Runner{
-			Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f),
+			Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f),
 		}); err != nil {
 			t.Fatalf("Run: %v", err)
 		}
@@ -1022,7 +1022,7 @@ func TestReviewFacts(t *testing.T) {
 		}}
 
 		if err := Run(t.Context(), Runner{
-			Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f),
+			Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f),
 		}); err != nil {
 			t.Fatalf("Run: %v", err)
 		}
@@ -1040,7 +1040,7 @@ func TestReviewFacts(t *testing.T) {
 		gh := &fakeGitHub{}
 
 		if err := Run(t.Context(), Runner{
-			Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f),
+			Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f),
 		}); err != nil {
 			t.Fatalf("Run: %v", err)
 		}
@@ -1069,7 +1069,7 @@ func TestTeamsYamlResolvesRequire(t *testing.T) {
 	gh := &fakeGitHub{teams: teams}
 
 	if err := Run(t.Context(), Runner{
-		Event:   commentEvent("@talooner /review"),
+		Event:   commentEvent("!talooner /review"),
 		GitHub:  gh.client(t),
 		Cluster: dialFake(t, f),
 	}); err != nil {
@@ -1086,7 +1086,7 @@ func TestABrokenRunWritesNeutralNotFailure(t *testing.T) {
 	f := &fakeCluster{answers: evaluated(&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_UNSPECIFIED})}
 	gh := &fakeGitHub{}
 
-	err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)})
+	err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)})
 	if !errors.Is(err, action.ErrUnknownVerb) {
 		t.Fatalf("Run returned %v, want action.ErrUnknownVerb: the job still goes red", err)
 	}
@@ -1105,7 +1105,7 @@ func TestExtractionFailureLeavesNoStaleVerdict(t *testing.T) {
 	f := &fakeCluster{answers: evaluated()}
 	gh := &fakeGitHub{failFiles: true, checkRunID: 4242}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err == nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err == nil {
 		t.Fatal("Run = nil, want the extraction failure")
 	}
 	got := gh.check(t)
@@ -1136,7 +1136,7 @@ func TestBrokenRulesetIsAnnotatedAndNeutral(t *testing.T) {
 	}
 	gh := &fakeGitHub{}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err == nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err == nil {
 		t.Fatal("Run = nil, want the plugin's refusal")
 	}
 	got := gh.check(t)
@@ -1164,7 +1164,7 @@ func TestBrokenRulesetWithNoDiagnosticsStillWritesTheCheck(t *testing.T) {
 	}
 	gh := &fakeGitHub{}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err == nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err == nil {
 		t.Fatal("Run = nil, want the plugin's refusal")
 	}
 	got := gh.check(t)
@@ -1179,7 +1179,7 @@ func TestAnUnwritableCheckRunFailsTheRun(t *testing.T) {
 	f := &fakeCluster{answers: evaluated(&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_APPROVE, Target: "pr"})}
 	gh := &fakeGitHub{checkFails: true}
 
-	err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)})
+	err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)})
 	if err == nil {
 		t.Fatal("Run = nil, want the failed check run write")
 	}
@@ -1195,7 +1195,7 @@ func TestUndecodableActionFailsTheRun(t *testing.T) {
 	)}
 	gh := &fakeGitHub{}
 
-	err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)})
+	err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)})
 	if !errors.Is(err, action.ErrUnknownVerb) {
 		t.Fatalf("Run returned %v, want action.ErrUnknownVerb", err)
 	}
@@ -1220,7 +1220,7 @@ func TestCommandFromAnAccountWithoutWriteAccessIsIgnored(t *testing.T) {
 	f := &fakeCluster{answers: evaluated()}
 	gh := &fakeGitHub{permission: "read"}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run = %v, want nil: an unauthorised command is exit 0 and silence", err)
 	}
 	if got := f.actions(); len(got) != 0 {
@@ -1244,7 +1244,7 @@ func TestAuthorizeFailureFailsTheRun(t *testing.T) {
 		t.Fatalf("github.New: %v", err)
 	}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh, Cluster: dialFake(t, f)}); err == nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh, Cluster: dialFake(t, f)}); err == nil {
 		t.Fatal("Run = nil, want an error when the permission check breaks")
 	}
 	if got := f.actions(); len(got) != 0 {
@@ -1256,7 +1256,7 @@ func TestUnknownCommandFromAnAuthorizedUserEvaluatesNothing(t *testing.T) {
 	f := &fakeCluster{answers: evaluated()}
 	gh := &fakeGitHub{}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /shipit"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /shipit"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if !gh.hit("/permission") {
@@ -1273,7 +1273,7 @@ func TestStopUnsubscribesAndStops(t *testing.T) {
 	}}
 	gh := &fakeGitHub{}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /stop"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /stop"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := f.actions(); strings.Join(got, ",") != cluster.ActionSetSubscription {
@@ -1298,7 +1298,7 @@ func TestWhyPostsTheExplanationAndDoesNotEvaluate(t *testing.T) {
 	}}
 	gh := &fakeGitHub{}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /why"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /why"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := f.actions(); strings.Join(got, ",") != cluster.ActionExplainPR {
@@ -1328,7 +1328,7 @@ func TestWhyTwiceWritesTwoComments(t *testing.T) {
 	c := dialFake(t, f)
 
 	for range 2 {
-		if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /why"), GitHub: gh.client(t), Cluster: c}); err != nil {
+		if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /why"), GitHub: gh.client(t), Cluster: c}); err != nil {
 			t.Fatalf("Run: %v", err)
 		}
 	}
@@ -1345,7 +1345,7 @@ func TestWhyWithNoDecisionRepliesInsteadOfFailing(t *testing.T) {
 	}}
 	gh := &fakeGitHub{}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /why"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /why"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run = %v, want nil: this is a clear answer, not a run failure", err)
 	}
 	c := gh.wrote(t)
@@ -1362,7 +1362,7 @@ func TestWhyTransportFailureFailsTheRun(t *testing.T) {
 	c := dialFake(t, f)
 	c.Close() //nolint:errcheck // deliberately broken to force a transport error
 
-	err := Run(t.Context(), Runner{Event: commentEvent("@talooner /why"), GitHub: gh.client(t), Cluster: c})
+	err := Run(t.Context(), Runner{Event: commentEvent("!talooner /why"), GitHub: gh.client(t), Cluster: c})
 	if err == nil {
 		t.Fatal("Run = nil, want an error when the cluster call fails outright")
 	}
@@ -1388,7 +1388,7 @@ func TestPlanPostsWhatTheHeadRulesetWouldDecide(t *testing.T) {
 	}
 	gh := &fakeGitHub{}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /plan"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /plan"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if args := f.argsOf(t, cluster.ActionEvaluatePR); args["mode"] != "plan" {
@@ -1411,7 +1411,7 @@ func TestPlanDoesNotSubscribe(t *testing.T) {
 	f := &fakeCluster{planAnswer: &taloonerpb.EvaluatePrResponse{}}
 	gh := &fakeGitHub{}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /plan"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /plan"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	for _, name := range f.actions() {
@@ -1426,7 +1426,7 @@ func TestPlanWithNoFiringsSaysSo(t *testing.T) {
 	f := &fakeCluster{planAnswer: &taloonerpb.EvaluatePrResponse{}}
 	gh := &fakeGitHub{}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /plan"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /plan"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	c := gh.wrote(t)
@@ -1441,7 +1441,7 @@ func TestPlanWithNoHeadRulesetRepliesInsteadOfEvaluating(t *testing.T) {
 	f := &fakeCluster{}
 	gh := &fakeGitHub{noRuleset: true}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /plan"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /plan"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := f.actions(); len(got) != 0 {
@@ -1461,7 +1461,7 @@ func TestPlanWithBrokenRulesetRepliesInsteadOfFailing(t *testing.T) {
 	}}
 	gh := &fakeGitHub{}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /plan"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /plan"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run = %v, want nil: this is a clear answer, not a run failure", err)
 	}
 	c := gh.wrote(t)
@@ -1478,7 +1478,7 @@ func TestPlanTransportFailureFailsTheRun(t *testing.T) {
 	c := dialFake(t, f)
 	c.Close() //nolint:errcheck // deliberately broken to force a transport error
 
-	err := Run(t.Context(), Runner{Event: commentEvent("@talooner /plan"), GitHub: gh.client(t), Cluster: c})
+	err := Run(t.Context(), Runner{Event: commentEvent("!talooner /plan"), GitHub: gh.client(t), Cluster: c})
 	if err == nil {
 		t.Fatal("Run = nil, want an error when the cluster call fails outright")
 	}
@@ -1559,7 +1559,7 @@ func TestMissingRulesetIsASkip(t *testing.T) {
 	f := &fakeCluster{answers: evaluated()}
 	gh := &fakeGitHub{noRuleset: true}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run = %v, want nil for a repo with no ruleset", err)
 	}
 	for _, a := range f.actions() {
@@ -1579,7 +1579,7 @@ func TestFactExtractionFailureNeverEvaluates(t *testing.T) {
 	f := &fakeCluster{answers: evaluated()}
 	gh := &fakeGitHub{prStatus: http.StatusInternalServerError}
 
-	err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)})
+	err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)})
 	if err == nil {
 		t.Fatal("Run = nil, want an error when the PR cannot be fetched")
 	}
@@ -1597,7 +1597,7 @@ func TestPluginRefusalFailsTheRun(t *testing.T) {
 	}
 	gh := &fakeGitHub{}
 
-	err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)})
+	err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)})
 	if err == nil {
 		t.Fatal("Run = nil, want the plugin's refusal to fail the run")
 	}
@@ -1632,7 +1632,7 @@ func TestForceIsRejectedWithoutEvaluating(t *testing.T) {
 	f := &fakeCluster{answers: evaluated()}
 	gh := &fakeGitHub{}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review --force"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review --force"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := f.actions(); len(got) != 0 {
@@ -1649,12 +1649,12 @@ func TestRunRejectsAnEventlessRunner(t *testing.T) {
 // The default handle is what an unconfigured repo uses; a run that silently
 // answered to something else would answer to nobody.
 func TestDefaultHandleIsUsedWhenUnset(t *testing.T) {
-	if command.DefaultHandle != "@talooner" {
+	if command.DefaultHandle != "!talooner" {
 		t.Fatalf("DefaultHandle = %q", command.DefaultHandle)
 	}
 	f := &fakeCluster{answers: evaluated()}
 	gh := &fakeGitHub{}
-	if err := Run(t.Context(), Runner{Event: commentEvent("@TALOONER /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!TALOONER /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := f.actions(); len(got) != 2 {
@@ -1671,7 +1671,7 @@ func TestFindingsArePostedAsOneStickyComment(t *testing.T) {
 	)}
 	gh := &fakeGitHub{}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -1699,7 +1699,7 @@ func TestASecondRunEditsTheSameComment(t *testing.T) {
 		{ID: 77, Body: comment.Marker(comment.TopicReview) + "\nold findings"},
 	}}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -1721,7 +1721,7 @@ func TestARunWithNothingToSayPostsNoComment(t *testing.T) {
 	f := &fakeCluster{answers: evaluated(&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_APPROVE, Target: "pr"})}
 	gh := &fakeGitHub{}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if len(gh.comments) != 0 {
@@ -1740,7 +1740,7 @@ func TestFindingsThatNoLongerHoldAreResolvedNotDeleted(t *testing.T) {
 		{ID: 77, Body: comment.Marker(comment.TopicReview) + "\nadd a description"},
 	}}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -1769,7 +1769,7 @@ func TestABrokenRulesetIsExplainedInTheComment(t *testing.T) {
 	}
 	gh := &fakeGitHub{}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err == nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err == nil {
 		t.Fatal("Run = nil, want the refusal")
 	}
 
@@ -1791,7 +1791,7 @@ func TestAnUnknownCommandIsAnsweredOnItsOwnTopic(t *testing.T) {
 	f := &fakeCluster{answers: evaluated()}
 	gh := &fakeGitHub{}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /frobnicate"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /frobnicate"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -1813,7 +1813,7 @@ func TestAnUnknownCommandFromAnUnauthorisedAccountIsNotAnswered(t *testing.T) {
 	f := &fakeCluster{answers: evaluated()}
 	gh := &fakeGitHub{permission: "read"}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /frobnicate"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /frobnicate"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if len(gh.comments) != 0 {
@@ -1832,7 +1832,7 @@ func TestAFailedCommentLeavesTheCheckNeutral(t *testing.T) {
 	)}
 	gh := &fakeGitHub{commentFails: true}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err == nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err == nil {
 		t.Fatal("Run = nil, want the comment failure")
 	}
 	got := gh.check(t)
@@ -1894,7 +1894,7 @@ func TestApproveSubmitsAReview(t *testing.T) {
 	})}
 	gh := &fakeGitHub{}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	got := gh.verdict(t)
@@ -1920,7 +1920,7 @@ func TestBlockDismissesTheEarlierApproval(t *testing.T) {
 	})}
 	gh := &fakeGitHub{standing: standingApproval()}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := gh.verdict(t).Event; got != github.ReviewRequestChanges {
@@ -1942,7 +1942,7 @@ func TestNoVerdictRetractsTheStandingReview(t *testing.T) {
 	})}
 	gh := &fakeGitHub{standing: standingApproval()}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if len(gh.reviews) != 0 {
@@ -1963,7 +1963,7 @@ func TestAVerbWithNoExecutorFailsBeforeAnythingIsWritten(t *testing.T) {
 	)}
 	gh := &fakeGitHub{}
 
-	err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)})
+	err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)})
 	if err == nil {
 		t.Fatal("Run = nil, want the missing executor to fail the run")
 	}
@@ -1986,7 +1986,7 @@ func TestAFailedReviewLeavesTheCheckNeutral(t *testing.T) {
 	})}
 	gh := &fakeGitHub{reviewFails: true}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err == nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err == nil {
 		t.Fatal("Run = nil, want the review failure")
 	}
 	if got := gh.check(t).Conclusion; got != github.ConclusionNeutral {
@@ -2003,7 +2003,7 @@ func TestAssignAndRequireAreWrittenAndRecorded(t *testing.T) {
 	)}
 	gh := &fakeGitHub{}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if !slices.Contains(gh.assignees, "alice") {
@@ -2043,7 +2043,7 @@ func TestNoActionsRetractsOnlyTaloonersOwnAssignees(t *testing.T) {
 		existing:  []existingComment{{ID: 77, Body: comment.Marker(comment.TopicState) + "\n" + ledger}},
 	}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if want := []string{"carol"}; !slices.Equal(gh.assignees, want) {
@@ -2059,7 +2059,7 @@ func TestAnIgnoredAssigneeLeavesTheCheckNeutral(t *testing.T) {
 	})}
 	gh := &fakeGitHub{ignored: []string{"stranger"}}
 
-	err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)})
+	err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)})
 	if !errors.Is(err, assignment.ErrIgnored) {
 		t.Fatalf("err = %v, want ErrIgnored", err)
 	}
@@ -2077,7 +2077,7 @@ func TestAnUnmappedRequireTargetFailsBeforeAnythingIsWritten(t *testing.T) {
 	)}
 	gh := &fakeGitHub{}
 
-	err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)})
+	err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)})
 	if !errors.Is(err, assignment.ErrTarget) {
 		t.Fatalf("err = %v, want ErrTarget", err)
 	}
@@ -2102,7 +2102,7 @@ func TestForkPRPostsTheDecisionDiffAgainstTheBaseRuleset(t *testing.T) {
 	}
 	gh := &fakeGitHub{fork: true, headRuleset: "rule \"different\" { }\n"}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -2135,7 +2135,7 @@ func TestForkHeadRulesetApprovingEverythingWritesNothingFromIt(t *testing.T) {
 	}
 	gh := &fakeGitHub{fork: true, headRuleset: "rule \"approve everything\" { }\n"}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -2148,7 +2148,7 @@ func TestForkPRWithNoHeadRulesetWritesNoDiffComment(t *testing.T) {
 	f := &fakeCluster{answers: evaluated(&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_APPROVE, Target: "pr"})}
 	gh := &fakeGitHub{fork: true, noHeadRuleset: true}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -2163,7 +2163,7 @@ func TestSameRepoBranchPRHasNoPlanComment(t *testing.T) {
 	f := &fakeCluster{answers: evaluated(&taloonerpb.Action{Verb: taloonerpb.Verb_VERB_APPROVE, Target: "pr"})}
 	gh := &fakeGitHub{} // fork defaults to false
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -2195,7 +2195,7 @@ func TestPlanDiffThatNoLongerHoldsIsResolved(t *testing.T) {
 		existing: []existingComment{{ID: 88, Body: comment.Marker(comment.TopicPlan) + "\nstale diff"}},
 	}
 
-	if err := Run(t.Context(), Runner{Event: commentEvent("@talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 

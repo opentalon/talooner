@@ -12,15 +12,15 @@ func TestParseVerbs(t *testing.T) {
 		body string
 		want string
 	}{
-		{"@talooner /review", VerbReview},
-		{"@talooner /stop", VerbStop},
-		{"@talooner /why", VerbWhy},
-		{"@talooner /plan", VerbPlan},
-		{"  @talooner /review", VerbReview},
-		{"@TALOONER /Review", VerbReview},
-		{"@talooner\t/review\t", VerbReview},
-		{"looks good\n\n@talooner /review\n", VerbReview},
-		{"@talooner /review\r\n", VerbReview},
+		{"!talooner /review", VerbReview},
+		{"!talooner /stop", VerbStop},
+		{"!talooner /why", VerbWhy},
+		{"!talooner /plan", VerbPlan},
+		{"  !talooner /review", VerbReview},
+		{"!TALOONER /Review", VerbReview},
+		{"!talooner\t/review\t", VerbReview},
+		{"looks good\n\n!talooner /review\n", VerbReview},
+		{"!talooner /review\r\n", VerbReview},
 	} {
 		cmd, err := Parse(DefaultHandle, tt.body)
 		if err != nil {
@@ -42,17 +42,17 @@ func TestParseNoCommand(t *testing.T) {
 		"looks good to me",
 		// A bare handle is not a command. Replying with usage to every mention
 		// makes the bot noisy in exactly the threads people discuss it in.
-		"@talooner",
-		"@talooner please have a look",
+		"!talooner",
+		"!talooner please have a look",
 		// No separator: this is not the handle followed by a command.
-		"@talooner/review",
+		"!talooner/review",
 		// A different handle entirely.
-		"@talonner /review",
-		"@talooner2 /review",
+		"!talonner /review",
+		"!talooner2 /review",
 		// The handle must lead the line, so quoting a comment that contains one
 		// does not re-invoke it.
-		"as @talooner /review would say",
-		"see the docs for @talooner /review usage",
+		"as !talooner /review would say",
+		"see the docs for !talooner /review usage",
 	} {
 		if _, err := Parse(DefaultHandle, body); !errors.Is(err, ErrNoCommand) {
 			t.Errorf("Parse(%q) error = %v, want ErrNoCommand", body, err)
@@ -62,16 +62,16 @@ func TestParseNoCommand(t *testing.T) {
 
 func TestParseIgnoresQuotesAndCodeBlocks(t *testing.T) {
 	for name, body := range map[string]string{
-		"blockquote":       "> @talooner /review\n\nnot me, them",
-		"nested quote":     ">> @talooner /stop",
-		"quote no space":   ">@talooner /review",
-		"backtick fence":   "run this:\n\n```\n@talooner /review\n```\n",
-		"tilde fence":      "run this:\n\n~~~\n@talooner /review\n~~~\n",
-		"annotated fence":  "```text\n@talooner /review\n```",
-		"indented code":    "    @talooner /review",
-		"tab indented":     "\t@talooner /review",
-		"unclosed fence":   "```\n@talooner /review",
-		"inline backticks": "type `@talooner /review` to start",
+		"blockquote":       "> !talooner /review\n\nnot me, them",
+		"nested quote":     ">> !talooner /stop",
+		"quote no space":   ">!talooner /review",
+		"backtick fence":   "run this:\n\n```\n!talooner /review\n```\n",
+		"tilde fence":      "run this:\n\n~~~\n!talooner /review\n~~~\n",
+		"annotated fence":  "```text\n!talooner /review\n```",
+		"indented code":    "    !talooner /review",
+		"tab indented":     "\t!talooner /review",
+		"unclosed fence":   "```\n!talooner /review",
+		"inline backticks": "type `!talooner /review` to start",
 	} {
 		if _, err := Parse(DefaultHandle, body); !errors.Is(err, ErrNoCommand) {
 			t.Errorf("%s: Parse(%q) error = %v, want ErrNoCommand", name, body, err)
@@ -80,7 +80,7 @@ func TestParseIgnoresQuotesAndCodeBlocks(t *testing.T) {
 }
 
 func TestParseAfterFenceCloses(t *testing.T) {
-	body := "```\n@talooner /stop\n```\n\n@talooner /review\n"
+	body := "```\n!talooner /stop\n```\n\n!talooner /review\n"
 	cmd, err := Parse(DefaultHandle, body)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -91,7 +91,7 @@ func TestParseAfterFenceCloses(t *testing.T) {
 }
 
 func TestParseFirstCommandWins(t *testing.T) {
-	cmd, err := Parse(DefaultHandle, "@talooner /why\n@talooner /stop\n")
+	cmd, err := Parse(DefaultHandle, "!talooner /why\n!talooner /stop\n")
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -102,8 +102,8 @@ func TestParseFirstCommandWins(t *testing.T) {
 
 func TestParseForceRejected(t *testing.T) {
 	for _, body := range []string{
-		"@talooner /review --force",
-		"@talooner /review   --force",
+		"!talooner /review --force",
+		"!talooner /review   --force",
 	} {
 		_, err := Parse(DefaultHandle, body)
 		if !errors.Is(err, ErrForceUnsupported) {
@@ -117,9 +117,9 @@ func TestParseForceRejected(t *testing.T) {
 
 func TestParseForceOnlyOnReview(t *testing.T) {
 	for _, body := range []string{
-		"@talooner /plan --force",
-		"@talooner /stop --force",
-		"@talooner /why --force",
+		"!talooner /plan --force",
+		"!talooner /stop --force",
+		"!talooner /why --force",
 	} {
 		if _, err := Parse(DefaultHandle, body); !errors.Is(err, ErrUnknownCommand) {
 			t.Errorf("Parse(%q) error = %v, want ErrUnknownCommand", body, err)
@@ -129,12 +129,12 @@ func TestParseForceOnlyOnReview(t *testing.T) {
 
 func TestParseUnknown(t *testing.T) {
 	for _, body := range []string{
-		"@talooner /frobnicate",
-		"@talooner /REVIEWS",
-		"@talooner /",
-		"@talooner /review --dry-run",
-		"@talooner /review extra",
-		"@talooner /stop now",
+		"!talooner /frobnicate",
+		"!talooner /REVIEWS",
+		"!talooner /",
+		"!talooner /review --dry-run",
+		"!talooner /review extra",
+		"!talooner /stop now",
 	} {
 		_, err := Parse(DefaultHandle, body)
 		if !errors.Is(err, ErrUnknownCommand) {
@@ -151,7 +151,7 @@ func TestParseCustomHandle(t *testing.T) {
 	if cmd.Verb != VerbReview {
 		t.Errorf("Verb = %s, want %s", cmd.Verb, VerbReview)
 	}
-	if _, err := Parse("@acme-bot", "@talooner /review"); !errors.Is(err, ErrNoCommand) {
+	if _, err := Parse("@acme-bot", "!talooner /review"); !errors.Is(err, ErrNoCommand) {
 		t.Errorf("default handle honoured under a custom one: %v", err)
 	}
 }
@@ -159,7 +159,7 @@ func TestParseCustomHandle(t *testing.T) {
 func TestParseEmptyHandle(t *testing.T) {
 	// An empty handle would match every line. Refuse rather than turn every
 	// comment on the PR into a command.
-	if _, err := Parse("", "@talooner /review"); err == nil || errors.Is(err, ErrNoCommand) {
+	if _, err := Parse("", "!talooner /review"); err == nil || errors.Is(err, ErrNoCommand) {
 		t.Errorf("Parse with an empty handle error = %v, want a real error", err)
 	}
 }

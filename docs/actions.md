@@ -160,7 +160,7 @@ POST to (decision 1). Your CI needs the cluster URL and API key, which it
 already has as secrets if it's the same repo.
 
 "Next evaluation" is doing real work in that diagram: in v1 nothing wakes on an
-externally asserted fact. Someone comments `@talooner /review` and the fact is
+externally asserted fact. Someone comments `!talooner /review` and the fact is
 picked up then (decision 20, `architecture.md`, "No reactive wake in v1"). A
 tenant who wants it prompt can have their CI POST the fact and then trigger the
 workflow themselves — but v1 ships neither the trigger nor a recipe for it.
@@ -231,7 +231,7 @@ alternative was not taken.
 
 | Event | Used for |
 |---|---|
-| `issue_comment` (created) | **The v1 entry point** — `@talooner /review [--force]`, `/stop`, `/why`, `/plan` |
+| `issue_comment` (created) | **The v1 entry point** — `!talooner /review [--force]`, `/stop`, `/why`, `/plan` |
 | `pull_request` (synchronize, reopened, closed) | Re-evaluate a subscribed PR; unsubscribe on close |
 | `pull_request_review` (submitted) | `review.*` facts |
 | `check_suite` (completed) | `pr.tests_passing`, `pr.lint_passing` |
@@ -248,5 +248,5 @@ and exits 0 otherwise — a skipped job, not a red X.
 
 Commands are honoured only from users with write access to the repo, checked
 against the installation's permission API on every command. Without that gate,
-any GitHub account could comment `@talooner /review` on a public repo and spend
+any GitHub account could comment `!talooner /review` on a public repo and spend
 the maintainer's LLM budget at will.

@@ -95,7 +95,7 @@ Everything that must survive between events — facts, subscriptions, decisions,
 `explain` output, `llm_review` results — is in `tln-db` already, because
 reactive rules (`when "pr.files_changed" changes`) required that regardless.
 
-Subscription state (which PRs were invoked with `@talooner /review`) is state
+Subscription state (which PRs were invoked with `!talooner /review`) is state
 too, so it lives cluster-side as a fact like everything else. Each run asks the
 plugin "is this PR subscribed?" rather than remembering.
 
@@ -150,7 +150,7 @@ talooner/
   internal/
     github/               # REST client over GITHUB_TOKEN
     event/                # parse GITHUB_EVENT_PATH into {repo, pr, trigger}
-    command/              # @talooner /review /stop /why /plan + write-access gate
+    command/              # !talooner /review /stop /why /plan + write-access gate
     facts/                # extractors: diff, checks, CODEOWNERS, modules, teams
     action/               # executor interface + one file per tln verb
       executor.go         #   interface + registry keyed by verb
@@ -170,7 +170,7 @@ talooner/
 Three things this layout is deliberately encoding:
 
 **`command/` and `action/` are not the same concept.** A *command* is a human
-typing `@talooner /review` in a PR comment — it arrives in the event payload, is
+typing `!talooner /review` in a PR comment — it arrives in the event payload, is
 gated on write access, and decides *whether to evaluate*. An *action* is a tln verb
 the plugin returned — it arrives as data from the engine and decides *what to do
 to GitHub*. Different inputs, different auth, different tests. Collapsing them
@@ -215,7 +215,7 @@ convention. See
 v1 does not review on its own. A human asks it to:
 
 ```
-@talooner /review
+!talooner /review
 ```
 
 posted as a PR comment. Nothing happens on `pull_request opened` alone.
@@ -240,7 +240,7 @@ Reasons this is right for v1, beyond it being less work:
 Once invoked on a PR, the PR is **subscribed**: subsequent pushes and check
 completions re-evaluate automatically, because that's what the reactive rules
 (`when "pr.files_changed" changes`) mean. Subscription is per PR and ends when
-the PR closes. `@talooner /stop` unsubscribes.
+the PR closes. `!talooner /stop` unsubscribes.
 
 Automatic review on PR open, opt-in per repo via config, is a later phase. The
 subscription machinery is identical; only the trigger differs.
@@ -249,11 +249,11 @@ Command surface in v1:
 
 | Command | Effect |
 |---|---|
-| `@talooner /review` | Evaluate now, subscribe this PR. Always a full re-evaluation |
-| `@talooner /review --force` | Same, but bypass the `llm_review` fact cache at this sha — costs money |
-| `@talooner /stop` | Unsubscribe |
-| `@talooner /why` | Render `explain` for the current head sha |
-| `@talooner /plan` | Evaluate the head-branch ruleset with no writes |
+| `!talooner /review` | Evaluate now, subscribe this PR. Always a full re-evaluation |
+| `!talooner /review --force` | Same, but bypass the `llm_review` fact cache at this sha — costs money |
+| `!talooner /stop` | Unsubscribe |
+| `!talooner /why` | Render `explain` for the current head sha |
+| `!talooner /plan` | Evaluate the head-branch ruleset with no writes |
 
 Commands are honoured only from users with write access to the repo. Otherwise
 any drive-by account could invoke reviews and burn the maintainer's LLM budget.
@@ -323,7 +323,7 @@ redelivery, and it's explicit.
 
 ```
 runner starts with {repo, pr, event, GITHUB_TOKEN}
-  0. is this PR subscribed? (invoked via @talooner /review)  — else exit 0
+  0. is this PR subscribed? (invoked via !talooner /review)  — else exit 0
   1. load ruleset  ← BASE branch (see "Fork safety")
   2. extract facts (see facts.md)
   3. plugin action "evaluate_pr" {repo, pr, head_sha, facts JSON, ruleset, mode}

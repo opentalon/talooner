@@ -33,7 +33,7 @@ which is most of the point. A review policy that lives in a web dashboard is a
 policy nobody can review.
 
 Read from the **base** branch when governing writes (`architecture.md`, "Fork
-safety"). Absent `.github/talooner/` → the bot replies to `@talooner /review`
+safety"). Absent `.github/talooner/` → the bot replies to `!talooner /review`
 with a one-comment "no ruleset found" and does nothing else.
 
 ## Namespaces
@@ -751,7 +751,7 @@ exits.
 
 One consequence worth stating with the retention rules: a fact asserted from
 outside (your CI POSTing `preview.status`) sits in `tln-db` doing nothing until
-something evaluates. In v1 that something is a human typing `@talooner /review`
+something evaluates. In v1 that something is a human typing `!talooner /review`
 (decision 20). If retention expires the fact before anyone does, the rule that
 wanted it never fires — so retention must outlive a realistic "nobody looked at
 this PR for a few days".
