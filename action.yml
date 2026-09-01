@@ -23,7 +23,7 @@ runs:
   # Published by the release workflow. Pinned to a digest at tag time so that
   # `uses: opentalon/talooner@<sha>` resolves to exactly one image forever;
   # on main it tracks the floating v1 tag.
-  image: docker://ghcr.io/opentalon/talooner:v1
+  image: docker://ghcr.io/opentalon/talooner@sha256:d7f98add4db77a3300ab726f82dffd98f4ce444a7e4351c148cdc77c82f05a28
   # The entrypoint reads these three from the environment; a docker action
   # otherwise only sees inputs as INPUT_*.
   env:
