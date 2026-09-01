@@ -133,6 +133,12 @@ func runOnboard(ctx context.Context, args []string, stdout, stderr io.Writer, gh
 		return 1
 	}
 
+	if localBranchExists(ctx, git, *branch) {
+		printf(stderr, "talooner onboard: branch %q already exists locally — a previous onboarding run may still have an open PR; check `gh pr list --repo %s --head %s`, then close/merge it or delete the local branch (`git branch -D %s`) before retrying\n",
+			*branch, *repo, *branch, *branch)
+		return 1
+	}
+
 	if err := onboard.CreateBranch(ctx, git, *branch, resolvedBase); err != nil {
 		printf(stderr, "talooner onboard: %v\n", err)
 		return 1
