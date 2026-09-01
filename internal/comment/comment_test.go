@@ -168,6 +168,20 @@ func TestResolvedSaysTheFindingsAreGone(t *testing.T) {
 	}
 }
 
+// #93: a PR no rule matched must not read the same as a PR the ruleset
+// evaluated and approved of. Resolved's "no longer apply" wording implies
+// findings existed and cleared, which is the wrong claim when none ever
+// fired.
+func TestNoRulesFiredDoesNotReadLikeAResolvedFinding(t *testing.T) {
+	body := NoRulesFired("abc123")
+	if !strings.Contains(body, "No rule") {
+		t.Errorf("body does not say no rule matched:\n%s", body)
+	}
+	if strings.Contains(body, "no longer apply") {
+		t.Errorf("body borrows Resolved's wording, which implies prior findings:\n%s", body)
+	}
+}
+
 func TestPlanRendersWhatWouldDifferAndNothingElse(t *testing.T) {
 	body := Plan(
 		[]action.Action{{Verb: action.VerbBlock, Target: "pr", Text: "needs tests"}},
