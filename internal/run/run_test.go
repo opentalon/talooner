@@ -1854,6 +1854,29 @@ func TestARunWithNothingToSayPostsNoComment(t *testing.T) {
 	}
 }
 
+// #93: zero rules matching the PR's facts (evaluate_pr returns no actions at
+// all) must not read the same as rules firing and approving of the PR — the
+// ruleset simply never took a position, and the default comment has to say
+// so rather than the ambiguous "Nothing to report".
+func TestARunWhereNoRuleMatchedSaysSoDistinctly(t *testing.T) {
+	f := &fakeCluster{answers: evaluated()} // no actions: nothing in the ruleset matched
+	gh := &fakeGitHub{}
+
+	if err := Run(t.Context(), Runner{Event: commentEvent("!talooner /review"), GitHub: gh.client(t), Cluster: dialFake(t, f)}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	got := gh.wrote(t)
+	if !strings.Contains(got.Body, "No rule") {
+		t.Errorf("comment = %q, want it to say no rule matched", got.Body)
+	}
+	if strings.Contains(got.Body, "Nothing to report") {
+		t.Errorf("comment = %q, must not read the same as a clean review", got.Body)
+	}
+	if got := gh.check(t).Conclusion; got != github.ConclusionSuccess {
+		t.Errorf("conclusion = %q, want %q", got, github.ConclusionSuccess)
+	}
+}
+
 // The findings of the run before this one are now wrong. They are edited to a
 // resolved state rather than deleted: the thread under them is somebody's.
 func TestFindingsThatNoLongerHoldAreResolvedNotDeleted(t *testing.T) {

@@ -159,6 +159,22 @@ func Resolved(sha string) string {
 	return b.String()
 }
 
+// NoRulesFired is the review comment for a run where the ruleset evaluated the
+// PR's facts and matched none of its rules — the ruleset simply has no
+// opinion on a change shaped like this one. It is its own message, distinct
+// from Resolved, because "no rule fired" and "rules fired and the PR passed"
+// must not read the same (#93): a silent gap in a ruleset's coverage should
+// not look identical to a clean bill of health.
+func NoRulesFired(sha string) string {
+	var b strings.Builder
+	b.WriteString("### Talooner review\n\n")
+	b.WriteString("No rule in the ruleset matched this pull request. This is not the same " +
+		"as reviewing it and finding nothing wrong — the ruleset has no opinion on a change " +
+		"shaped like this one.\n")
+	b.WriteString(footer(sha))
+	return b.String()
+}
+
 // Plan is the fork-PR decision diff (E2, #21): what this PR's own head-branch
 // ruleset would do differently from the base ruleset that actually governs
 // writes. Nothing in added or removed was performed — the base decision

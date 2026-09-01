@@ -697,11 +697,20 @@ func (r Runner) report(ctx context.Context, repo string, pr *github.PullRequest,
 // previous run left findings on this PR, they are now wrong, so the comment is
 // edited to its resolved state rather than left standing — and never deleted,
 // because the discussion under it is somebody's (actions.md, "Reversibility").
+//
+// Empty is true in two shapes that must not read the same (#93): rules fired
+// and none of them minded (actions carries an approve or the like), versus no
+// rule matching the facts at all (actions is empty — nothing performed
+// anything, so nothing fired). len(actions) == 0 is what tells them apart;
+// Empty alone only says whether there is prose worth posting.
 func (r Runner) reviewComment(ctx context.Context, repo string, pr *github.PullRequest,
 	actions []action.Action, warnings []check.Warning, summary string,
 ) error {
 	body, editOnly := comment.Review(actions, warnings, summary, pr.HeadSHA), false
-	if comment.Empty(actions, warnings) {
+	switch {
+	case comment.Empty(actions, warnings) && len(actions) == 0:
+		body, editOnly = comment.NoRulesFired(pr.HeadSHA), true
+	case comment.Empty(actions, warnings):
 		body, editOnly = comment.Resolved(pr.HeadSHA), true
 	}
 	if err := r.sticky(ctx, comment.TopicReview, body, editOnly); err != nil {
