@@ -281,6 +281,14 @@ func Acknowledge() string {
 	return "Evaluating this pull request…"
 }
 
+// Stopped is the reply to a manual `!talooner /stop`, posted before the PR is
+// unsubscribed. The only other trace of a stop is the Actions log, which the
+// commander does not see, so unsubscribing with no comment made it look like
+// the command did nothing (#99).
+func Stopped() string {
+	return "Unsubscribed. Talooner will not evaluate this pull request again until `!talooner /review` is run."
+}
+
 // Usage is the one reply a command Talooner does not understand gets. The
 // caller has already established that the commander has write access; replying
 // to anyone else advertises the bot and hands them a way to make it post

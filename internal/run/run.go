@@ -126,6 +126,12 @@ func Run(ctx context.Context, r Runner) error {
 				r.Log.Warn("cannot write the acknowledge comment", "repo", repo, "pr", ev.PR, "err", err)
 			}
 		case command.VerbStop:
+			// Posted before unsubscribing: the Actions log is not something the
+			// commander reads, so a stop with no comment looks like it did
+			// nothing (#99).
+			if _, err := r.GitHub.CreateComment(ctx, ev.Owner, ev.Repo, ev.PR, comment.Stopped()); err != nil {
+				return fmt.Errorf("write stopped comment for %s#%d: %w", repo, ev.PR, err)
+			}
 			if _, err := r.Cluster.SetSubscription(ctx, repo, ev.PR, false); err != nil {
 				return fmt.Errorf("unsubscribe %s#%d: %w", repo, ev.PR, err)
 			}

@@ -1400,6 +1400,13 @@ func TestStopUnsubscribesAndStops(t *testing.T) {
 	if gh.hit("/pulls/42/files") {
 		t.Error("extracted facts for a PR that was being unsubscribed")
 	}
+	c := gh.wrote(t)
+	if !c.created {
+		t.Error("the stop reply must be a new comment, not an edit")
+	}
+	if !strings.Contains(c.Body, "Unsubscribed") {
+		t.Errorf("comment is missing the stop confirmation:\n%s", c.Body)
+	}
 }
 
 func TestWhyPostsTheExplanationAndDoesNotEvaluate(t *testing.T) {
