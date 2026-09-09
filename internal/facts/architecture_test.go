@@ -181,6 +181,53 @@ func TestPRArchitectureDiffSlicePerUnit(t *testing.T) {
 	}
 }
 
+// unit.test_diff (talooner#94) is a strict subset of a unit's DiffSlice: the
+// unit still carries the whole diff (prod code included) via DiffSlice, but
+// TestDiffSlice narrows to only the assertion-touching hunk of its test file.
+func TestPRArchitectureTestDiffSlicePerUnit(t *testing.T) {
+	diff := "diff --git a/internal/auth/token.go b/internal/auth/token.go\n" +
+		"--- a/internal/auth/token.go\n+++ b/internal/auth/token.go\n@@ -1 +1 @@\n+prod change\n" +
+		"diff --git a/internal/auth/token_test.go b/internal/auth/token_test.go\n" +
+		"--- a/internal/auth/token_test.go\n+++ b/internal/auth/token_test.go\n" +
+		"@@ -1,1 +1,1 @@\n-fixture := v1\n+fixture := v2\n" +
+		"@@ -5,1 +5,1 @@\n-require.Equal(t, 5, ttl)\n+require.Equal(t, 500, ttl)\n"
+	files := []github.FileStat{
+		{Path: "internal/auth/token.go"},
+		{Path: "internal/auth/token_test.go"},
+	}
+	s := New()
+	units := architectureFacts(s, files, diff, nil)
+	if len(units) != 1 {
+		t.Fatalf("units = %+v, want exactly one (both files fold into internal/auth)", units)
+	}
+	u := units[0]
+
+	if !strings.Contains(u.DiffSlice, "prod change") || !strings.Contains(u.DiffSlice, "fixture := v2") {
+		t.Errorf("DiffSlice = %q, want both the prod and test hunks", u.DiffSlice)
+	}
+	if !strings.Contains(u.TestDiffSlice, "require.Equal(t, 500, ttl)") {
+		t.Errorf("TestDiffSlice = %q, want the assertion hunk", u.TestDiffSlice)
+	}
+	if strings.Contains(u.TestDiffSlice, "fixture := v2") {
+		t.Errorf("TestDiffSlice = %q, must not carry the non-assertion fixture hunk", u.TestDiffSlice)
+	}
+	if strings.Contains(u.TestDiffSlice, "prod change") {
+		t.Errorf("TestDiffSlice = %q, must not carry the prod file's hunk", u.TestDiffSlice)
+	}
+}
+
+// A unit with no test file at all — the common case — gets an empty
+// TestDiffSlice, not a dead extractor left unset (facts.md, "Unset is
+// false"): CodeUnit is a plain struct, so "empty" is the honest zero here.
+func TestPRArchitectureTestDiffSliceEmptyWithNoTestFile(t *testing.T) {
+	files := []github.FileStat{{Path: "app/models/user.rb"}}
+	s := New()
+	units := architectureFacts(s, files, "diff --git a/app/models/user.rb b/app/models/user.rb\n--- a/app/models/user.rb\n+++ a/app/models/user.rb\n@@ -1 +1 @@\n+x\n", nil)
+	if len(units) != 1 || units[0].TestDiffSlice != "" {
+		t.Errorf("units = %+v, want one unit with an empty TestDiffSlice", units)
+	}
+}
+
 // PR() wires architectureFacts in next to moduleFacts: the code.* facts are
 // visible on the Set the public extractor returns, not just internally.
 func TestPRWiresArchitectureFacts(t *testing.T) {

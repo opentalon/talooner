@@ -567,6 +567,41 @@ a JSON string arg, the same shape as `facts`). `doc_content` is read from the
 **base branch**, per unit's `doc_ref`, so a fork PR cannot rewrite the doc it
 is judged against.
 
+### `unit.test_diff` — the per-hunk test-assertion diff (issue #94)
+
+Each `code_unit` also carries `test_diff` (`CodeUnit.TestDiffSlice`,
+`internal/facts/test_diff.go`): the subset of the unit's own `diff_slice`
+that is both inside a test file and touches an assertion line — a hunk that
+loosened a tolerance, removed a check, or widened a matcher, as opposed to
+setup/fixture churn in the same file. It exists for the highest-value
+`llm_review` category over agent-authored code: an agent "fixing" a failing
+test by weakening the assertion instead of the underlying bug. Seeing that
+requires the assertion hunk specifically — `diff_slice` mixes it with every
+other prod and test change in the unit, which is too much noise for a model
+to reliably flag the one line that matters.
+
+A file is recognised as a test file by name, best-effort and not exhaustive
+(`isTestFile`): Go's `_test.go`, Ruby's `_test.rb`/`_spec.rb`, Python's
+`test_*.py`/`*_test.py`, and JS/TS's `.test.{js,jsx,ts,tsx}` /
+`.spec.{js,jsx,ts,tsx}`. Within a recognised test file, a hunk counts as
+assertion-touching when an added or removed line matches a common assertion
+call across those languages — `assert*`, `expect*`, testify's
+`require.Equal`/`NoError`/`Error`/etc, RSpec's `should`, Go's `wantErr`,
+`raises`, or Jest/Chai's `toEqual`/`toBe`. A naming convention or call shape
+this misses simply contributes nothing, the same "safer left out than
+guessed" call `pr.new_dependencies` makes for an unrecognised manifest —
+there is no base rule depending on `test_diff` today, so a false negative
+here costs nothing but a smaller detector, while a false positive would
+mislabel ordinary fixture churn as an assertion change.
+
+`test_diff` is empty, never absent, when a unit has no test file or its test
+files' hunks touch no recognised assertion — `CodeUnit` is a plain struct
+with no notion of "unset" (`facts.md`'s "Unset is false" is about the flat
+`Set`, not per-unit fields), so the honest empty string is what a unit with
+nothing to flag gets. The wire field is sent on every unit regardless;
+`talooner-plugin` has no matching field yet ([`talooner-plugin#63`](https://github.com/opentalon/talooner-plugin/issues/63)),
+so it is decoded and dropped until that lands.
+
 **Gated on the repo having its own `.github/talooner/architecture.yaml`** —
 not on any rule actually using `llm_review`. The built-in per-language layer
 table alone matches almost every changed file in almost every repo (Go's

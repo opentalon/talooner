@@ -40,6 +40,12 @@ type CodeUnit struct {
 	DocContent    string `json:"doc_content"`
 	Diff          string `json:"diff"`
 	DiffTruncated bool   `json:"diff_truncated"`
+	// TestDiff is the unit's assertion-touching test-file hunks, a strict
+	// subset of Diff (talooner#94). Empty when the unit has no test file, or
+	// its test files touch no assertion call — the plugin has no matching
+	// field yet (talooner-plugin#63), so this is sent but silently dropped
+	// by its decoder until that lands.
+	TestDiff string `json:"test_diff"`
 }
 
 // EvaluateRequest is one evaluation. Repo is owner/name — the plugin scopes

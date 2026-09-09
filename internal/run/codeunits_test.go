@@ -84,6 +84,26 @@ func TestResolveCodeUnitsWarnsOnceForASharedOversizedDoc(t *testing.T) {
 	}
 }
 
+// TestDiffSlice (talooner#94) rides along with DiffSlice through to the
+// wire shape's TestDiff field — resolveCodeUnits must not drop it the way it
+// drops nothing else copied straight from facts.CodeUnit.
+func TestResolveCodeUnitsCarriesTestDiffSlice(t *testing.T) {
+	gh := &fakeGitHub{docs: map[string]string{"docs/services/auth.md": "the contract"}}
+	r := Runner{GitHub: gh.client(t), Log: slog.New(slog.DiscardHandler)}
+
+	units := []facts.CodeUnit{
+		{Kind: "service", Path: "internal/auth", Important: true, DocRef: "docs/services/auth.md",
+			DiffSlice: "diff-a", TestDiffSlice: "require.Equal(t, 500, ttl)"},
+	}
+	got, _, err := r.resolveCodeUnits(t.Context(), "opentalon", "talooner", "master", units, codeUnitArch)
+	if err != nil {
+		t.Fatalf("resolveCodeUnits: %v", err)
+	}
+	if len(got) != 1 || got[0].TestDiff != "require.Equal(t, 500, ttl)" {
+		t.Errorf("code units = %+v, want TestDiff carried through", got)
+	}
+}
+
 // An architecture.yaml override that names no doc_ref at all — "the unit still
 // exists, it simply carries no doc to review against" (facts.md) — is dropped
 // with no fetch and no warning: this is a declared answer, not a problem.
