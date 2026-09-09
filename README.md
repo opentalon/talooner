@@ -111,6 +111,79 @@ Because the policy is a file in your repo, it is versioned, diffable, reviewable
 and unit-testable with `.tln.test` before it ever gates a real PR. That is a
 claim no LLM-based reviewer can make.
 
+## Facts
+
+Every built-in fact a rule can match on. Full extraction rules, edge cases, and
+three-valued semantics: [`docs/facts.md`](docs/facts.md).
+
+### `pr.*`
+
+| Fact | Solves |
+|---|---|
+| `pr.number`, `pr.head_sha`, `pr.base_sha` | identify the PR/commit a rule is looking at |
+| `pr.author` | who opened it |
+| `pr.is_fork` | fork-safety gating |
+| `pr.draft` | skip draft PRs |
+| `pr.title`, `pr.body` | text-based rules |
+| `pr.has_description` | require a filled-in PR body |
+| `pr.lines_changed`, `pr.additions`, `pr.deletions` | size-based gating ("small change") |
+| `pr.files_changed`, `pr.changed_files` | path-based rules (`contains`/`starts_with`/`ends_with`) |
+| `pr.commits` | commit-count gating |
+| `pr.labels` | label-based rules |
+| `pr.mergeable` | block on unresolved conflicts (omitted while GitHub still computing) |
+| `pr.checks_pending` | don't review a moving target while checks are running |
+| `pr.tests_passing`, `pr.lint_passing` | CI-gated auto-approve, matched against `config.yaml` check patterns |
+| `pr.diff` | LLM review input |
+| `pr.diff_truncated` | flag a diff cut off at the 1 MiB cap |
+| `pr.new_dependencies`, `pr.upgraded_dependencies` | trigger security review on manifest changes |
+
+### `user.*` — who owns the code, distinct from `pr.author`
+
+| Fact | Solves |
+|---|---|
+| `user.owner` | primary owner to escalate to (CODEOWNERS, else last toucher) |
+| `user.owners` | every owner across touched paths |
+| `user.author` | alias of `pr.author`, for symmetry |
+| `user.reviewer` | currently requested reviewer |
+| `user.last_toucher` | who last touched the code, when CODEOWNERS is silent |
+
+### `review.*` — review state, folded from full history
+
+| Fact | Solves |
+|---|---|
+| `review.human.approved` | a non-bot approval exists at the current head sha |
+| `review.changes_requested` | any reviewer's standing decision is "request changes" |
+| `review.<name>.requested` | that team's review is currently requested |
+| `review.<name>.approved` | a CODEOWNERS-proxy member of that team approved at head sha |
+| `review.<name>.stale` | such an approval exists but at an old commit |
+
+### `module.*` — lookup against `.github/talooner/modules.yaml`
+
+| Fact | Solves |
+|---|---|
+| `module.touched_count` | require narrow PRs ("split this by module") |
+| `module.documentation_url` | link the primary touched module's docs |
+| `module.documentation_urls` | every touched module's docs |
+| `module.owner` | the primary module's declared owner |
+
+### `code.*` — layer classification (models/controllers/services)
+
+| Fact | Solves |
+|---|---|
+| `code.models_changed`, `code.controllers_changed`, `code.services_changed` | which units of each kind were touched |
+| `code.touches_model`, `code.touches_controller`, `code.touches_service` | gate rules by layer |
+
+### Other
+
+| Fact | Solves |
+|---|---|
+| `llm_review.*` | **not implemented yet** — spec-only doc-vs-diff verdict, see `docs/expert-review-system.md` |
+| custom (`POST /api/v1/facts`) | anything Talooner can't know itself — preview URLs, scan results — pushed by your own CI |
+
+Need a path predicate that isn't built in (`pr.touches_auth`, `ui_change`, ...)?
+Write it yourself with `define` over `pr.changed_files` — see `docs/facts.md`,
+"Project-specific facts".
+
 ## Docs
 
 | File | Contents |
