@@ -551,6 +551,7 @@ func (r Runner) resolveCodeUnits(ctx context.Context, owner, repo, baseRef strin
 			DocURL:     u.DocRef,
 			DocContent: string(d.content),
 			Diff:       u.DiffSlice,
+			TestDiff:   u.TestDiffSlice,
 		})
 	}
 	return result, warnings, nil

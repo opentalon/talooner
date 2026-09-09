@@ -20,6 +20,11 @@ type CodeUnit struct {
 	Important bool
 	DocRef    string
 	DiffSlice string
+	// TestDiffSlice is the assertion-touching hunks of the unit's own test
+	// files, a strict subset of DiffSlice (facts.md, "unit.test_diff" —
+	// talooner#94). Empty when the unit has no test file, or its test files'
+	// hunks touch no assertion call.
+	TestDiffSlice string
 }
 
 // layer is one built-in per-language convention: a path prefix, the kind of
@@ -106,11 +111,12 @@ func architectureFacts(s Set, files []github.FileStat, diff string, arch []confi
 			}
 		}
 		result = append(result, CodeUnit{
-			Kind:      u.kind,
-			Path:      unitPath,
-			Important: true,
-			DocRef:    u.docRef,
-			DiffSlice: strings.Join(parts, "\n"),
+			Kind:          u.kind,
+			Path:          unitPath,
+			Important:     true,
+			DocRef:        u.docRef,
+			DiffSlice:     strings.Join(parts, "\n"),
+			TestDiffSlice: testAssertionDiff(u.files, slices),
 		})
 		byKind[u.kind] = append(byKind[u.kind], unitPath)
 	}
