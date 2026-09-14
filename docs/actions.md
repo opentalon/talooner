@@ -88,6 +88,14 @@ Template interpolation (`"screenshots at {screenshots.gallery_url}"`) uses
 tln's existing `{ident.field}` label interpolation (`grammar.ebnf:601`).
 Confirm it's available in action-argument position, not only in labels.
 
+Every plugin-supplied value reaching a comment body — findings text, fact
+values interpolated from a PR's title/body/branch on a fork — is HTML-escaped
+before it's written. That closes two holes: raw HTML in the rendered comment,
+and a forged `<!-- talooner:v1:... -->` marker that would make the next run
+edit an attacker's comment instead of Talooner's own. The GitHub review body
+goes further and carries no plugin-supplied text at all, for the same reason —
+there's nothing in it for a fork PR's title to forge.
+
 ### Reversibility
 
 Facts retract; GitHub side effects mostly don't. Explicit per action:

@@ -9,62 +9,31 @@ import (
 	"strings"
 )
 
-// Review events Talooner submits. COMMENT is deliberately absent: a review with
-// no verdict is what the sticky comment is for, and it would cost every watcher
-// an email for nothing.
 const (
 	ReviewApprove        = "APPROVE"
 	ReviewRequestChanges = "REQUEST_CHANGES"
 )
 
-// ErrReviewPermission is what SyncReview wraps a 403 or 422 in when submitting
-// a review. GitHub returns one of those two for exactly one reason in
-// practice: the repo or org has "Allow GitHub Actions to create and approve
-// pull requests" turned off, so GITHUB_TOKEN cannot leave a verdict no matter
-// what the workflow's own permissions: block says (auth.md, "Error codes",
-// TAL-E-REVIEW-PERM). Wrapping it means the check run and sticky comment say
-// that plainly instead of surfacing GitHub's raw, often terse response.
 var ErrReviewPermission = errors.New(
 	"TAL-E-REVIEW-PERM: GitHub rejected the review — insufficient permissions for talooner. " +
 		`Enable "Allow GitHub Actions to create and approve pull requests" for this repo or org ` +
 		"(Settings → Actions → General), see auth.md, \"Error codes\"")
 
-// Review states GitHub reports back. Only these two are still standing; a
-// DISMISSED, COMMENTED or PENDING review is not a verdict anyone can act on, so
-// none of them is Talooner's to dismiss.
 const (
 	StateApproved         = "APPROVED"
 	StateChangesRequested = "CHANGES_REQUESTED"
 )
 
-// stateOf is the review state an event leaves behind, so a run can tell whether
-// what it wants is already standing.
 var stateOf = map[string]string{
 	ReviewApprove:        StateApproved,
 	ReviewRequestChanges: StateChangesRequested,
 }
 
-// Review is the verdict Talooner leaves as a GitHub review.
-//
-// Identity is the marker in the body, never a remembered id — the same choice
-// StickyComment makes, and for the same reason: the id is not ours to keep
-// between runs, and a maintainer may dismiss the review at any time.
 type Review struct {
-	// Marker is the HTML comment identifying Talooner's own reviews. It is
-	// prepended to Body on the way out, so Body must not carry it.
-	Marker string
-	// Event is ReviewApprove, ReviewRequestChanges, or "" to retract: an empty
-	// event dismisses whatever Talooner has standing and submits nothing. That
-	// is the whole retraction half of actions.md, "Reversibility" — facts
-	// retract, and a GitHub review does not unless something dismisses it.
-	Event string
-	Body  string
-	// CommitID pins a submitted review to the sha it judged. Required whenever
-	// Event is set: a review submitted against whatever HEAD happens to be is a
-	// verdict on code nobody computed it from.
-	CommitID string
-	// DismissMessage is what GitHub shows in place of a dismissed review. It is
-	// the audit trail for the retraction, so it says why.
+	Marker         string
+	Event          string
+	Body           string
+	CommitID       string
 	DismissMessage string
 }
 
@@ -76,8 +45,6 @@ func (rv Review) validate() error {
 		return fmt.Errorf("review marker %q spans lines", rv.Marker)
 	}
 	if strings.TrimSpace(rv.DismissMessage) == "" {
-		// The API rejects an empty dismissal message, and a dismissal with no
-		// reason on it is one nobody can act on.
 		return errors.New("review needs a dismissal message")
 	}
 	if rv.Event == "" {
@@ -98,7 +65,6 @@ func (rv Review) validate() error {
 	return nil
 }
 
-// text is what gets submitted: the marker, then the body.
 func (rv Review) text() string { return rv.Marker + "\n" + rv.Body }
 
 type reviewPayload struct {
@@ -109,20 +75,11 @@ type reviewPayload struct {
 	User     *reviewUser `json:"user"`
 }
 
-// reviewUser is the part of a review's author GitHub reports back: the login,
-// and Type "Bot" for an app account like dependabot — the distinction
-// review.human.approved needs (facts.md, "review.*").
 type reviewUser struct {
 	Login string `json:"login"`
 	Type  string `json:"type"`
 }
 
-// ReviewReport is one entry from a pull request's review history, as far as
-// fact extraction reads it — every review ever submitted, not folded to
-// current state. The caller derives "current" per login (facts.md,
-// "review.*"), the same way GitHub's own merge box does: a dismissal flips
-// State to DISMISSED on the same entry rather than adding a new one, so this
-// is the whole history, not a snapshot.
 type ReviewReport struct {
 	ID       int64
 	Login    string
@@ -131,12 +88,6 @@ type ReviewReport struct {
 	CommitID string
 }
 
-// PullRequestReviews lists every review ever submitted on the pull request,
-// paginated to the end. Unlike findReviews it is not filtered to Talooner's
-// own marker — every reviewer's history is what review.* facts fold down to
-// current state. A listing that fails takes the call down rather than
-// returning a partial history, the same rule as every other extractor fetch
-// (facts.md, "Unset is false").
 func (c *Client) PullRequestReviews(ctx context.Context, owner, repo string, number int) ([]ReviewReport, error) {
 	if number <= 0 {
 		return nil, fmt.Errorf("pull request number must be positive, got %d", number)
@@ -165,20 +116,6 @@ func (c *Client) PullRequestReviews(ctx context.Context, owner, repo string, num
 	return out, nil
 }
 
-// SyncReview makes Talooner's standing review on the PR match rv, and returns
-// the id of the review left standing — 0 when there is none, which is both the
-// retraction case and the "nothing was owed" one.
-//
-// Everything here is about the retraction half:
-//
-//   - a verdict that flipped dismisses the old review before submitting the new
-//     one, in that order. A dismissal that fails then leaves nothing standing
-//     rather than an approval standing next to a request for changes, and an
-//     approval is the permissive one to get wrong;
-//   - a verdict that did not change leaves the review alone. Re-submitting the
-//     same one at every push costs every reviewer an email and says nothing new;
-//   - a review a human already dismissed reads as DISMISSED, so it is not ours
-//     to dismiss again and retraction is a no-op rather than a 422.
 func (c *Client) SyncReview(ctx context.Context, owner, repo string, number int, rv Review) (int64, error) {
 	if number <= 0 {
 		return 0, fmt.Errorf("pull request number must be positive, got %d", number)
@@ -197,7 +134,7 @@ func (c *Client) SyncReview(ctx context.Context, owner, repo string, number int,
 	var current int64
 	for _, r := range standing {
 		if rv.Event != "" && r.State == want && current == 0 {
-			current = r.ID // already saying what this run wants to say
+			current = r.ID
 			continue
 		}
 		stale = append(stale, r)
@@ -241,9 +178,6 @@ func (c *Client) SyncReview(ctx context.Context, owner, repo string, number int,
 	return written.ID, nil
 }
 
-// dismissReview retracts one review. A review that disappeared between the
-// listing and the dismissal is not an error: something else already retracted
-// it, which is the outcome this call wanted.
 func (c *Client) dismissReview(ctx context.Context, owner, repo string, number int, id int64, message string) error {
 	path, err := repoPath(owner, repo, "pulls", fmt.Sprint(number), "reviews", fmt.Sprint(id), "dismissals")
 	if err != nil {
@@ -267,9 +201,6 @@ func (c *Client) dismissReview(ctx context.Context, owner, repo string, number i
 	return nil
 }
 
-// findReviews returns Talooner's own standing reviews, oldest first. A listing
-// that fails takes the call down rather than falling through to a submit, which
-// is the duplicate — and the undismissed approval — this exists to prevent.
 func (c *Client) findReviews(ctx context.Context, owner, repo string, number int, marker string) ([]reviewPayload, error) {
 	path, err := repoPath(owner, repo, "pulls", fmt.Sprint(number), "reviews")
 	if err != nil {
@@ -286,7 +217,7 @@ func (c *Client) findReviews(ctx context.Context, owner, repo string, number int
 			continue
 		}
 		if r.State != StateApproved && r.State != StateChangesRequested {
-			continue // dismissed, or a plain comment: nothing standing to retract
+			continue
 		}
 		mine = append(mine, r)
 	}

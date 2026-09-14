@@ -16,20 +16,8 @@ import (
 	"github.com/opentalon/talooner/internal/onboard"
 )
 
-// defaultOnboardBranch is onboard's flag default for the branch it creates.
-// There's no equivalent default for --base: which branch is "the" base
-// varies per repo, so it's auto-detected (resolveBaseBranch) rather than
-// guessed at with a single hardcoded name.
 const defaultOnboardBranch = "talooner-onboarding"
 
-// runOnboard writes the workflow file, investigates the repo it's run in,
-// asks the cluster to scaffold a rules.tln + rules.tln.test pair via
-// generate_ruleset (falling back to onboard's static starter when the
-// plugin reports source == "fallback"), verifies the pair through the same
-// validate/test round-trip `talooner rules validate`/`talooner rules test`
-// use, and — unless --no-pr — commits, pushes, and opens a PR titled
-// "talooner onboarding". It writes local files before touching git, so a
-// maintainer can always `git diff` before anything is pushed.
 func runOnboard(ctx context.Context, args []string, stdout, stderr io.Writer, gh, git onboard.Runner) int {
 	fs := flag.NewFlagSet("onboard", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -73,7 +61,7 @@ func runOnboard(ctx context.Context, args []string, stdout, stderr io.Writer, gh
 		printf(stderr, "%s\n", describeDialFailure("onboard", err))
 		return 1
 	}
-	defer client.Close() //nolint:errcheck // best-effort on the way out of a one-shot command
+	defer client.Close() //nolint:errcheck
 
 	genResp, err := client.GenerateRuleset(ctx, summary)
 	if err != nil {
@@ -165,12 +153,6 @@ func runOnboard(ctx context.Context, args []string, stdout, stderr io.Writer, gh
 	return 0
 }
 
-// resolveBaseBranch returns explicit if the caller gave one — an explicit
-// --base always wins, no auto-detection needed. Otherwise it tries the
-// repo's local "master", then "main"; a repo using neither (a third
-// convention, or none checked out at all) has to be told with --base rather
-// than guessed at, since guessing wrong means cutting a branch from — and
-// opening a PR against — the wrong base.
 func resolveBaseBranch(ctx context.Context, git onboard.Runner, explicit string) (string, error) {
 	if strings.TrimSpace(explicit) != "" {
 		return explicit, nil
@@ -183,17 +165,11 @@ func resolveBaseBranch(ctx context.Context, git onboard.Runner, explicit string)
 	return "", fmt.Errorf("could not detect a base branch (no local master or main); specify --base")
 }
 
-// localBranchExists reports whether branch exists in the local working
-// tree's refs — cheap enough to shell out for twice (master, then main)
-// without a separate flag to skip it.
 func localBranchExists(ctx context.Context, git onboard.Runner, branch string) bool {
 	_, err := git.Run(ctx, "", "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
 	return err == nil
 }
 
-// onboardPRBody explains where the ruleset came from and what grounded it,
-// so a reviewer isn't left guessing whether they're looking at a model's
-// guess or the plain starter.
 func onboardPRBody(genResp *taloonerpb.GenerateRulesetResponse, summary string) string {
 	var b strings.Builder
 	if genResp.GetSource() == "llm" {

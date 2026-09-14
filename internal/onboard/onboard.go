@@ -1,6 +1,3 @@
-// Package onboard is the guts of `talooner init` and `talooner onboard`: the
-// starter files a repo gets wired up with, and writing them without
-// clobbering something a maintainer already edited.
 package onboard
 
 import (
@@ -11,51 +8,29 @@ import (
 	"path/filepath"
 )
 
-// Workflow is `talooner onboard`'s workflow file — `init` only sets secrets,
-// it writes no local files.
-//
 //go:embed templates/talooner.yml
 var Workflow []byte
 
-// Ruleset and RulesetTest are no longer written by `init` — they are
-// `talooner onboard`'s fallback pair, substituted in when the cluster's
-// generate_ruleset reports source == "fallback" (no host, quota exhausted,
-// or an unparseable/invalid model reply).
-//
 //go:embed templates/rules.tln
 var Ruleset []byte
 
 //go:embed templates/rules.tln.test
 var RulesetTest []byte
 
-// WorkflowPath, RulesetPath, and RulesetTestPath are where `onboard` writes
-// the workflow file and the generated (or fallback) ruleset — the same
-// ruleset paths internal/run reads at runtime (RulesetPath there is the
-// canonical source; this package doesn't import internal/run to avoid a
-// dependency edge from onboarding back into the run loop).
 const (
 	WorkflowPath    = ".github/workflows/talooner.yml"
 	RulesetPath     = ".github/talooner/rules.tln"
 	RulesetTestPath = ".github/talooner/rules.tln.test"
 )
 
-// Outcome is what happened to one file `init` tried to write.
 type Outcome int
 
 const (
-	// Created means the file didn't exist and now does.
 	Created Outcome = iota
-	// Unchanged means the file already existed with identical content — not
-	// an error, just nothing to do.
 	Unchanged
-	// Conflict means the file exists with different content and force was
-	// false. Diff carries a naive line diff for the caller to show.
 	Conflict
 )
 
-// WriteFile writes content to path unless a different file is already there,
-// in which case it refuses and returns Conflict (plus a diff) rather than
-// clobbering something a maintainer edited by hand. force skips that check.
 func WriteFile(path string, content []byte, force bool) (Outcome, string, error) {
 	existing, err := os.ReadFile(path)
 	if err != nil {
@@ -92,11 +67,6 @@ func create(path string, content []byte) error {
 	return nil
 }
 
-// diff is a naive line-oriented comparison, not a minimal edit script — good
-// enough to show a maintainer which lines changed on two short config files
-// without pulling in a diff library. It walks both files by index; an
-// inserted or deleted line partway through reads as every line after it
-// changing, which a real LCS diff wouldn't do.
 func diff(path, existing, next string) string {
 	oldLines := splitLines(existing)
 	newLines := splitLines(next)

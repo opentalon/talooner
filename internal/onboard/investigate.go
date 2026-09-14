@@ -8,9 +8,6 @@ import (
 	"strings"
 )
 
-// manifestLanguages maps a manifest file at repo root to the language(s) its
-// presence implies. Not exhaustive — enough to ground the generation prompt,
-// not a build-system detector.
 var manifestLanguages = map[string]string{
 	"go.mod":           "Go",
 	"package.json":     "JavaScript/TypeScript (Node)",
@@ -23,27 +20,15 @@ var manifestLanguages = map[string]string{
 	"build.gradle":     "Java/Kotlin (Gradle)",
 }
 
-// readmeExcerptLines caps how much of the README goes into the prompt — a
-// grounding excerpt, not the whole file.
 const readmeExcerptLines = 40
 
-// maxTopLevelDirs caps how many top-level directory names are listed, so a
-// monorepo with hundreds of packages doesn't blow out the prompt.
 const maxTopLevelDirs = 40
 
-// dirsToSkip are never descended into or listed: not source, or too large to
-// usefully summarize.
 var dirsToSkip = map[string]bool{
 	".git": true, "node_modules": true, "vendor": true, "bin": true,
 	"dist": true, "build": true, ".venv": true,
 }
 
-// Investigate walks root (a repo checkout) and builds a compact text summary
-// for generate_ruleset's prompt: which manifests are present (and so which
-// languages are in play), the top-level directory layout, existing GitHub
-// Actions workflow names, whether CODEOWNERS exists, and a short README
-// excerpt. It does no AST/deep parsing — just enough for the model to ground
-// itself, not a full repo profiler.
 func Investigate(root string) (string, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -117,9 +102,6 @@ func workflowNames(root string) ([]string, error) {
 	return names, nil
 }
 
-// readmeExcerpt reads the first readmeExcerptLines lines of the repo's
-// top-level README (case-insensitive, .md preferred), or "" if there isn't
-// one.
 func readmeExcerpt(root string) (string, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {

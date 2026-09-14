@@ -38,14 +38,6 @@ func runRules(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	}
 }
 
-// runRulesValidate compiles a tenant's ruleset against the cluster without
-// evaluating anything, so a bad ruleset is caught before it ever gates a PR.
-// It round-trips to the cluster's validate_ruleset action rather than
-// embedding a second compiler — that is a deliberate decision (issue #24),
-// resolving the conflict between architecture.md (bot links neither
-// tln-language nor tln-db) and auth.md's older "all local" claim: a tenant's
-// CI and the plugin can never disagree about whether a ruleset is valid,
-// because it is literally the same code path.
 func runRulesValidate(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("rules validate", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -85,7 +77,7 @@ func runRulesValidate(ctx context.Context, args []string, stdout, stderr io.Writ
 		printf(stderr, "%s\n", describeDialFailure("rules validate", err))
 		return 1
 	}
-	defer client.Close() //nolint:errcheck // best-effort on the way out of a one-shot command
+	defer client.Close() //nolint:errcheck
 
 	if !validateAndPrint(ctx, client, "talooner rules validate", path, string(src), stdout, stderr) {
 		return 1
@@ -93,13 +85,6 @@ func runRulesValidate(ctx context.Context, args []string, stdout, stderr io.Writ
 	return 0
 }
 
-// validateAndPrint round-trips src to the cluster's validate_ruleset action
-// and prints diagnostics/result the way `rules validate` always has —
-// factored out so `talooner onboard` can run the identical verification
-// step against a freshly generated ruleset without a second copy of this
-// dial-and-print logic. cmd prefixes error lines (e.g. "talooner rules
-// validate" or "talooner onboard") so output reads like it came from
-// whichever command actually called it.
 func validateAndPrint(ctx context.Context, client *cluster.Client, cmd, path, src string, stdout, stderr io.Writer) bool {
 	resp, err := client.ValidateRuleset(ctx, src)
 	if err != nil {
@@ -117,11 +102,6 @@ func validateAndPrint(ctx context.Context, client *cluster.Client, cmd, path, sr
 	return true
 }
 
-// runRulesTest runs a tenant's rules.tln.test against rules.tln, round-tripped
-// to the cluster's run_ruleset_test action the same way runRulesValidate
-// round-trips to validate_ruleset (issue #24's second half) — a tenant's CI
-// and the plugin can never disagree about whether a rule passes its own
-// tests, because it is the same code path.
 func runRulesTest(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("rules test", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -167,7 +147,7 @@ func runRulesTest(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		printf(stderr, "%s\n", describeDialFailure("rules test", err))
 		return 1
 	}
-	defer client.Close() //nolint:errcheck // best-effort on the way out of a one-shot command
+	defer client.Close() //nolint:errcheck
 
 	if !testAndPrint(ctx, client, "talooner rules test", rulesetPath, string(src), string(testSrc), stdout, stderr) {
 		return 1
@@ -175,9 +155,6 @@ func runRulesTest(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	return 0
 }
 
-// testAndPrint round-trips src/testSrc to the cluster's run_ruleset_test
-// action and prints results the way `rules test` always has — factored out
-// for the same reason validateAndPrint is (see its doc comment).
 func testAndPrint(ctx context.Context, client *cluster.Client, cmd, rulesetPath, src, testSrc string, stdout, stderr io.Writer) bool {
 	resp, err := client.RunRulesetTest(ctx, src, testSrc)
 	if err != nil {
@@ -185,11 +162,6 @@ func testAndPrint(ctx context.Context, client *cluster.Client, cmd, rulesetPath,
 		return false
 	}
 
-	// The plugin's Diagnostic has no file field on the wire (talooner-plugin's
-	// toProtoDiagnostics drops it), even though the underlying compiler knows
-	// whether a diagnostic came from rules.tln or rules.tln.test — so a
-	// position here can only be line:column, not a full path. Flagged
-	// upstream rather than guessed at.
 	if len(resp.GetDiagnostics()) > 0 {
 		for _, d := range resp.GetDiagnostics() {
 			printf(stderr, "%s: %s\n", testDiagnosticPosition(d), strings.TrimSpace(d.GetMessage()))
@@ -218,13 +190,6 @@ func testAndPrint(ctx context.Context, client *cluster.Client, cmd, rulesetPath,
 	return true
 }
 
-// runRulesPlan runs a live PR's base-branch ruleset in plan mode and prints
-// the actions that would fire (F4, #25). It reuses run.Runner.Plan — the
-// printer executor (D1) swapped into the same registry the real run executes
-// with — so this is never a second code path that can drift from what
-// execution actually does, and mode: plan makes "zero writes" a property of
-// the wire protocol rather than a convention this command has to uphold on
-// its own.
 func runRulesPlan(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("rules plan", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -264,7 +229,7 @@ func runRulesPlan(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		printf(stderr, "%s\n", describeDialFailure("rules plan", err))
 		return 1
 	}
-	defer client.Close() //nolint:errcheck // best-effort on the way out of a one-shot command
+	defer client.Close() //nolint:errcheck
 
 	gh, err := github.NewFromEnv(github.WithLogger(log), github.WithSecrets(client.APIKey()))
 	if err != nil {
@@ -280,9 +245,6 @@ func runRulesPlan(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	return 0
 }
 
-// testDiagnosticPosition formats a run_ruleset_test diagnostic's location as
-// line[:column] only — no file, since the wire response can't say whether the
-// diagnostic came from rules.tln or rules.tln.test (see runRulesTest).
 func testDiagnosticPosition(d *taloonerpb.Diagnostic) string {
 	if d.GetLine() <= 0 {
 		return "rules test"
@@ -293,9 +255,6 @@ func testDiagnosticPosition(d *taloonerpb.Diagnostic) string {
 	return fmt.Sprintf("line %d:%d", d.GetLine(), d.GetColumn())
 }
 
-// diagnosticPosition formats a diagnostic's location the way a compiler
-// error normally reads (path:line:column). Line 0 means the compiler could
-// not place it (internal/check.Diagnostic carries the same convention).
 func diagnosticPosition(path string, d *taloonerpb.Diagnostic) string {
 	if d.GetLine() <= 0 {
 		return path
