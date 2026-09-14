@@ -9,16 +9,8 @@ import (
 	"strings"
 )
 
-// mergeablePollAttempts bounds how many times ResolveMergeable re-fetches the
-// PR after the first fetch, while GitHub's background job computes
-// mergeability — mergeablePollAttempts+1 GETs in total. GitHub usually
-// resolves it within a couple of seconds; past this the fact is omitted rather
-// than guessed (facts.md, "pr.mergeable").
 const mergeablePollAttempts = 5
 
-// PullRequest is the part of a PR that facts are built from (facts.md,
-// "pr.*"). Everything here comes from one GET, which is also how an
-// issue_comment run learns its head sha — that payload carries none.
 type PullRequest struct {
 	Number       int
 	HeadSHA      string
@@ -37,22 +29,11 @@ type PullRequest struct {
 	ChangedFiles int
 	Commits      int
 	Labels       []string
-	// Mergeable is what GitHub's asynchronous mergeability job has computed.
-	// nil means the API answered null — either the job has not finished, which
-	// is the common case right after a push, or the PR is closed/merged and it
-	// never will (facts.md, "pr.mergeable").
-	Mergeable *bool
-	// Assignees and Requested are the state internal/assignment reconciles
-	// against: who is assigned, and which review requests are standing. They come
-	// from this same GET rather than from calls of their own, so a run reads them
-	// once and cannot reconcile against a state that moved in between.
-	Assignees []string
-	Requested Reviewers
+	Mergeable    *bool
+	Assignees    []string
+	Requested    Reviewers
 }
 
-// FileStat is one path the PR touches and the lines it changed, from the Files
-// API. It is what lets a module.* extractor pick the primary module by most
-// changed lines rather than by file count (facts.md, "module.*").
 type FileStat struct {
 	Path      string
 	Additions int
@@ -95,7 +76,6 @@ type pullRequestPayload struct {
 	reviewersPayload
 }
 
-// PullRequest fetches one PR.
 func (c *Client) PullRequest(ctx context.Context, owner, repo string, number int) (*PullRequest, error) {
 	if number <= 0 {
 		return nil, fmt.Errorf("pull request number must be positive, got %d", number)
@@ -141,19 +121,10 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, number int
 	for _, l := range p.Labels {
 		pr.Labels = append(pr.Labels, l.Name)
 	}
-	// A deleted head repo reads as nil, which is not the base repo, so it counts
-	// as a fork — the cautious way round for a fact that gates secrets.
 	pr.IsFork = p.Head.Repo == nil || p.Base.Repo == nil || p.Head.Repo.FullName != p.Base.Repo.FullName
 	return pr, nil
 }
 
-// ResolveMergeable fetches the PR and, while GitHub's asynchronous mergeability
-// job has not answered (mergeable: null on an open PR), re-fetches it a bounded
-// number of times. It returns the PR once mergeable resolves. A closed or merged
-// PR never resolves — GitHub leaves mergeable null on those — so it returns as-is
-// rather than burning the budget. This is the one fact that may come back
-// unresolved (facts.md, "pr.mergeable"), which is why it lives apart from
-// PullRequest instead of slowing that call for callers that only need the sha.
 func (c *Client) ResolveMergeable(ctx context.Context, owner, repo string, number int) (*PullRequest, error) {
 	for attempt := 0; ; attempt++ {
 		pr, err := c.PullRequest(ctx, owner, repo, number)
@@ -164,7 +135,7 @@ func (c *Client) ResolveMergeable(ctx context.Context, owner, repo string, numbe
 			return pr, nil
 		}
 		if attempt >= mergeablePollAttempts {
-			return pr, nil // still unknown; the extractor omits pr.mergeable
+			return pr, nil
 		}
 		if err := c.sleep(ctx, c.backoff(attempt)); err != nil {
 			return nil, fmt.Errorf("wait to resolve mergeability of %s/%s#%d: %w", owner, repo, number, err)
@@ -172,9 +143,6 @@ func (c *Client) ResolveMergeable(ctx context.Context, owner, repo string, numbe
 	}
 }
 
-// ChangedFiles lists every path the PR touches, following pagination to the end.
-// A PR bigger than the page cap fails rather than returning a prefix: rules
-// asserting on pr.changed_files would silently miss the rest (facts.md).
 func (c *Client) ChangedFiles(ctx context.Context, owner, repo string, number int) ([]string, error) {
 	if number <= 0 {
 		return nil, fmt.Errorf("pull request number must be positive, got %d", number)
@@ -201,18 +169,12 @@ func (c *Client) ChangedFiles(ctx context.Context, owner, repo string, number in
 	return paths, nil
 }
 
-// fileStat is the part of a Files API entry that ChangedFileStats reads: the
-// path and the lines it added and removed.
 type fileStat struct {
 	Filename  string `json:"filename"`
 	Additions int    `json:"additions"`
 	Deletions int    `json:"deletions"`
 }
 
-// ChangedFileStats lists every path the PR touches and the lines it changed,
-// following pagination to the end. A PR bigger than the page cap fails rather
-// than returning a prefix: module.* selection sums these counts, and a dropped
-// page would silently mis-pick the primary module.
 func (c *Client) ChangedFileStats(ctx context.Context, owner, repo string, number int) ([]FileStat, error) {
 	if number <= 0 {
 		return nil, fmt.Errorf("pull request number must be positive, got %d", number)
@@ -237,17 +199,8 @@ func (c *Client) ChangedFileStats(ctx context.Context, owner, repo string, numbe
 	return stats, nil
 }
 
-// writeAccess is the set of permission levels that may run a command. GitHub
-// reports "maintain" as its own level rather than as "write".
 var writeAccess = map[string]bool{"admin": true, "maintain": true, "write": true}
 
-// HasWriteAccess reports whether login may run Talooner commands on owner/repo.
-// It implements command.PermissionChecker.
-//
-// A login GitHub does not know as a collaborator comes back 404, which is an
-// answer — false, no error. Every other failure is an error: a permission API
-// that 500s must fail the run rather than quietly reading as "not authorised"
-// and dropping a maintainer's command.
 func (c *Client) HasWriteAccess(ctx context.Context, owner, repo, login string) (bool, error) {
 	if login == "" {
 		return false, errors.New("cannot check write access for an empty login")
@@ -279,8 +232,6 @@ func (c *Client) HasWriteAccess(ctx context.Context, owner, repo, login string) 
 	return false, nil
 }
 
-// repoPath builds /repos/{owner}/{repo}/... with every segment escaped, so a
-// login or branch name carrying a slash cannot reach another endpoint.
 func repoPath(owner, repo string, rest ...string) (string, error) {
 	if owner == "" || repo == "" {
 		return "", fmt.Errorf("owner and repo are required, got %q/%q", owner, repo)

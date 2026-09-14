@@ -66,7 +66,7 @@ false":
 | `pr.number` | int | payload |
 | `pr.head_sha`, `pr.base_sha` | string | payload |
 | `pr.author` | string | payload |
-| `pr.is_fork` | bool | `head.repo.full_name != base.repo.full_name` |
+| `pr.is_fork` | bool | `head.repo.full_name != base.repo.full_name`¹ |
 | `pr.draft` | bool | payload |
 | `pr.title`, `pr.body` | string | payload |
 | `pr.has_description` | bool | `len(strings.TrimSpace(body)) > 0` |
@@ -84,6 +84,10 @@ false":
 | `pr.diff_truncated` | bool | true when `pr.diff` hit the cap and was cut short (issue #9) |
 | `pr.new_dependencies` | int | manifest diff — see below |
 | `pr.upgraded_dependencies` | int | manifest diff — see below |
+
+¹ A deleted head repo reads as `null`, which is never equal to the base repo,
+so it counts as a fork — the cautious direction for a fact that gates whether
+secrets reach a run.
 
 ### `pr.mergeable` and `pr.checks_pending`
 

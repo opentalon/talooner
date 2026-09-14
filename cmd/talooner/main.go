@@ -1,9 +1,3 @@
-// Command talooner is the operator CLI: cluster login, repo onboarding, and
-// running rulesets against a live PR without writing anything.
-//
-// Output convention: stdout is the answer (tenant, quota, models…), stderr is
-// everything else (usage, errors). A deliberate misuse (no command, unknown
-// command, missing flag) exits 2; a command that ran but failed exits 1.
 package main
 
 import (
@@ -85,11 +79,6 @@ func runCluster(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	}
 }
 
-// runClusterLogin stores host and key locally. It does not dial the cluster —
-// that is whoami's job, so a login typed while the cluster happens to be
-// unreachable still saves, and a tenant learns about a bad host or a revoked
-// key from the same command that will always tell them (whoami), not from
-// two different failure paths depending on when they last ran login.
 func runClusterLogin(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("cluster login", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -120,10 +109,6 @@ func runClusterLogin(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// runClusterWhoami is the onboarding experience: the first command a tenant
-// runs after standing up a cluster, so every failure path gets a distinct
-// message rather than one generic "failed" — a missing credentials file
-// reads nothing like a revoked key, and neither reads like a nil dereference.
 func runClusterWhoami(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("cluster whoami", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -146,16 +131,13 @@ func runClusterWhoami(ctx context.Context, args []string, stdout, stderr io.Writ
 		return 1
 	}
 
-	// The CLI's own diagnostics, not the run's — nothing here needs to reach a
-	// log aggregator, so discard rather than duplicate cluster.Dial's own
-	// stderr-worthy lines under a second, uncoordinated writer.
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	client, err := cluster.Dial(ctx, creds.Host, creds.APIKey, cluster.WithLogger(log))
 	if err != nil {
 		printf(stderr, "%s\n", describeDialFailure("cluster whoami", err))
 		return 1
 	}
-	defer client.Close() //nolint:errcheck // best-effort on the way out of a one-shot command
+	defer client.Close() //nolint:errcheck
 
 	id := client.Identity()
 	printf(stdout, "tenant:           %s\n", id.Tenant)
@@ -166,14 +148,6 @@ func runClusterWhoami(ctx context.Context, args []string, stdout, stderr io.Writ
 	return 0
 }
 
-// runInit sets the two secrets `talooner onboard`'s workflow needs
-// (OPENTALON_HOST, OPENTALON_API_KEY) on the target repo — nothing else.
-// It writes no local files and touches no git: it works purely against the
-// GitHub API via gh, so it doesn't need to run inside a checkout of --repo
-// at all. Workflow file, ruleset, and PR are all `talooner onboard`'s job,
-// since a repo-shaped ruleset needs to investigate the repo first. gh is the
-// gh CLI wrapper — a real onboard.GH{} from main, a fake from tests, so the
-// test suite never shells out to a real gh binary.
 func runInit(ctx context.Context, args []string, stdout, stderr io.Writer, gh onboard.Runner) int {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -229,19 +203,10 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer, gh on
 	return 0
 }
 
-// printf writes to w and discards a write failure: this is diagnostic and
-// result output on a one-shot CLI command, and a caller whose stdout or
-// stderr is gone (closed pipe) has nothing this process could do about it.
 func printf(w io.Writer, format string, args ...any) {
 	_, _ = fmt.Fprintf(w, format, args...)
 }
 
-// describeDialFailure turns one of cluster.Dial's sentinel errors into the
-// onboarding-relevant sentence, prefixed with which command hit it. Order
-// matters: a rejected key wraps both ErrAction and ErrHandshake (a dial wraps
-// the plugin's own refusal in the handshake error), so the specific case has
-// to be checked before the catch-all "cannot reach cluster" one or every
-// rejected key would read as unreachable.
 func describeDialFailure(cmd string, err error) string {
 	switch {
 	case errors.Is(err, cluster.ErrMissingHost), errors.Is(err, cluster.ErrMissingKey):

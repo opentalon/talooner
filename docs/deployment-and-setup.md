@@ -116,7 +116,9 @@ talooner cluster whoami
 `login` only saves credentials locally (`~/.talooner/credentials`, not
 committed anywhere); `whoami` is what actually dials the cluster. If this
 fails, fix it before going further — `init` below depends on stored
-credentials existing.
+credentials existing. The file and its parent directory are created
+owner-only (`0600`/`0700`) — a shared home directory or a backup tool that
+preserves modes must not leave the cluster API key group- or world-readable.
 
 ### Wire up the repo
 

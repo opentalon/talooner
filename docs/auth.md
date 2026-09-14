@@ -47,7 +47,17 @@ design simply doesn't exist.
   mode where it silently reviews without the engine.
 - `.github/talooner/*.yaml` in a tenant repo is attacker-controllable on a fork
   PR. It is parsed as data only — no credential fields, no URLs the runner will
-  authenticate to, no path escapes above the repo root.
+  authenticate to, no path escapes above the repo root. The credential-field
+  check walks the raw YAML document rather than the typed struct it decodes
+  into, so it also catches a field this build doesn't recognize yet — a field
+  ignored today is exactly the one a later reader would trust without anyone
+  re-checking it.
+- `talooner init` passes secrets to `gh secret set` over stdin, never as an
+  argument, so a value never lands in `argv` — and so never in `ps` output or a
+  shell history file.
+- The GitHub REST client refuses to follow a redirect (an absolute URL from a
+  pagination `Link` header) off the API's own host — `GITHUB_TOKEN` travels on
+  the next request, and a redirect to another host must not get to see it.
 
 ## GitHub auth
 

@@ -8,16 +8,7 @@ import (
 	"github.com/opentalon/talooner/internal/github"
 )
 
-// moduleFacts asserts the module.* namespace (facts.md, "module.*"). They are
-// tenant-supplied lookup tables, so the only inputs are the changed files' line
-// counts and the configured modules — no API call of their own.
-//
-// A PR is evaluated once, not per module, so module.* binds to the primary
-// touched module: the one whose files carry the most changed lines. Ties are
-// broken by path order so the same PR resolves identically on a re-run. Every
-// configured module the PR touches is counted, even when it is not the primary.
 func moduleFacts(s Set, files []github.FileStat, modules []config.Module) {
-	// lines[path] is the sum of every changed line under that module's prefix.
 	lines := make(map[string]int, len(modules))
 	touched := 0
 	for _, m := range modules {
@@ -33,17 +24,11 @@ func moduleFacts(s Set, files []github.FileStat, modules []config.Module) {
 		}
 	}
 
-	// module.touched_count is always asserted: a PR that touches no configured
-	// module reads 0, which is the honest answer, not an unset fact (facts.md,
-	// "module.touched_count"). The rest stay unset, because an unset module.*
-	// simply makes a rule gated on it not fire — the safe direction.
 	s.Int("module.touched_count", touched)
 	if touched == 0 {
 		return
 	}
 
-	// primary is the module with the most changed lines; on a tie the one whose
-	// path sorts first wins, which is the deterministic tie-break (issue #13).
 	primary := ""
 	best := -1
 	for _, m := range sortedByPath(modules) {
@@ -64,11 +49,6 @@ func moduleFacts(s Set, files []github.FileStat, modules []config.Module) {
 	}
 	sort.Strings(docURLs)
 
-	// module.documentation_url is the primary module's doc URL; module.owner its
-	// owner. Both are left unset when the primary module declares neither, so a
-	// require/comment rule quoting them simply does not fire rather than quoting
-	// an empty string. module.documentation_urls is the de-duplicated, sorted set
-	// across every touched module, so a rule can reference them all.
 	if p := moduleByPath(modules, primary); p != nil {
 		if p.DocumentationURL != "" {
 			s.String("module.documentation_url", p.DocumentationURL)
@@ -82,10 +62,6 @@ func moduleFacts(s Set, files []github.FileStat, modules []config.Module) {
 	}
 }
 
-// moduleOwns reports whether path is under a module's configured prefix. Modules
-// are directory prefixes, so "internal/auth/" matches "internal/auth/x.go" and
-// "internal/auth" matches a file of that exact name; it does not match
-// "internal/authority/x.go".
 func moduleOwns(prefix, path string) bool {
 	prefix = strings.TrimSuffix(prefix, "/")
 	if prefix == "" {
@@ -94,8 +70,6 @@ func moduleOwns(prefix, path string) bool {
 	return path == prefix || strings.HasPrefix(path, prefix+"/")
 }
 
-// sortedByPath returns the modules ordered by their path for deterministic
-// primary-module selection.
 func sortedByPath(modules []config.Module) []config.Module {
 	out := make([]config.Module, len(modules))
 	copy(out, modules)
@@ -103,8 +77,6 @@ func sortedByPath(modules []config.Module) []config.Module {
 	return out
 }
 
-// moduleByPath finds the module configured at path, or nil when the PR touched no
-// module with that key (which should not happen here, but keeps the lookup total).
 func moduleByPath(modules []config.Module, path string) *config.Module {
 	for i := range modules {
 		if modules[i].Path == path {

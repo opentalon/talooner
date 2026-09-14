@@ -2,14 +2,6 @@ package action
 
 import "fmt"
 
-// blockSpec is `do block "pr.merge"`: the talooner check run at failure, plus a
-// REQUEST_CHANGES review (actions.md). Talooner has no merge rights — whether
-// the check gates the merge is the repo's branch protection to decide.
-//
-// block and approve can both fire; the tie is resolved by the plugin's
-// defeasible machinery, not here. What reaches the bot is both actions and a
-// warning, and block-wins is the last-resort tiebreak in the check run (D2) and
-// in the review (review.Verdict) alike, so the two never disagree.
 var blockSpec = spec{
 	verb: VerbBlock,
 	validate: func(a Action) error {

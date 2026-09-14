@@ -9,33 +9,13 @@ import (
 	"strings"
 )
 
-// DiffMaxBytes is the cap on pr.diff. A diff bigger than this is truncated and
-// the pr.diff_truncated fact is set so a rule — and v1.5's llm_review — can tell
-// a complete diff from a capped one. 1 MiB is the v1 default; a tenant cap from
-// config.yaml (E1) is passed straight through, which is why the call takes the
-// limit rather than reading a global.
 const DiffMaxBytes = 1 << 20
 
-// filePatch is the part of a Files API entry that pr.diff reads. Patch is the
-// unified diff; it is null for binary or oversized files, which contribute
-// nothing textual to the diff.
 type filePatch struct {
 	Filename string `json:"filename"`
 	Patch    string `json:"patch"`
 }
 
-// Diff concatenates the unified diffs of every file the PR touches, from the
-// Files API, capped at maxBytes. It returns the diff and whether it was capped.
-//
-// The cap is file-granular: whole files are appended while they fit and the next
-// one would push past the cap, at which point the loop stops and truncated is
-// true. A patch that alone exceeds the cap yields an empty diff with
-// truncated — nothing is silently shipped as complete, and the flag is the only
-// signal a consumer gets.
-//
-// Binary files (null patch) are skipped. The endpoint is paginated and followed
-// to the end — or until the cap — because a diff that stopped at a page boundary
-// would read as a complete, smaller change.
 func (c *Client) Diff(ctx context.Context, owner, repo string, number, maxBytes int) (string, bool, error) {
 	if number <= 0 {
 		return "", false, fmt.Errorf("pull request number must be positive, got %d", number)
@@ -65,7 +45,7 @@ func (c *Client) Diff(ctx context.Context, owner, repo string, number, maxBytes 
 		}
 		for _, f := range files {
 			if f.Patch == "" {
-				continue // binary or non-diffable file: nothing textual to add
+				continue
 			}
 			add := f.Patch
 			if buf.Len() > 0 {

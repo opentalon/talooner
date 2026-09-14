@@ -10,85 +10,21 @@ import (
 	"github.com/opentalon/talooner/internal/github"
 )
 
-// Source is the part of *github.Client that pr.* extraction needs.
 type Source interface {
-	// ResolveMergeable is the PR with mergeable resolved to a bounded poll:
-	// GitHub computes mergeability asynchronously and returns null until it has,
-	// so the client re-fetches while null rather than handing the extractor a
-	// fact it must guess. Mergeable stays nil for a closed or merged PR, which
-	// never resolves.
 	ResolveMergeable(ctx context.Context, owner, repo string, number int) (*github.PullRequest, error)
 	ChangedFileStats(ctx context.Context, owner, repo string, number int) ([]github.FileStat, error)
 	CommitChecks(ctx context.Context, owner, repo, headSHA string) (github.Checks, error)
-	// Diff is the concatenated file patches, capped at maxBytes. The second
-	// return is whether the cap was hit, so a rule can tell a complete diff from
-	// a truncated one (issue #9).
 	Diff(ctx context.Context, owner, repo string, number, maxBytes int) (string, bool, error)
-	// PullRequestReviews is every review ever submitted, unfolded — review.*
-	// facts fold it to current state per login (facts.md, "review.*").
 	PullRequestReviews(ctx context.Context, owner, repo string, number int) ([]github.ReviewReport, error)
-	// LastToucher is the second tier of user.owner resolution (facts.md,
-	// "user.owner"), called only when CODEOWNERS names nobody for any touched
-	// path. It returns "" rather than an error when nothing resolves.
 	LastToucher(ctx context.Context, owner, repo, baseSHA string, paths []string) (string, error)
 }
 
-// PR extracts the built-in pr.* facts (facts.md, "Built-in pr.* facts"). They
-// are a pure function of the PR at its head sha, so a run re-extracts rather
-// than caching.
-//
-// Four API calls, all required. ResolveMergeable can poll for several seconds
-// while GitHub's mergeability job is still running, so it runs alongside
-// ChangedFiles rather than blocking it; CommitChecks needs the head sha
-// ResolveMergeable returns, so it fires once that settles. Any fetch failing
-// fails the whole extraction — see the package comment for why a partial set
-// is the dangerous outcome.
-//
-// checks are the tenant's test/lint name patterns from config.yaml. They filter
-// the CommitChecks fetch C8 already makes (facts.md, "tests_passing /
-// lint_passing"): pr.tests_passing and pr.lint_passing are derived from it, so
-// the two facts cost no extra API call. An empty pattern list leaves the
-// matching fact unset rather than guessing.
-//
-// codeowners is the repo's CODEOWNERS file, read from the base branch at its own
-// ref (facts.md, "user.owner"); it is nil when the repo has none. user.owner and
-// user.owners are derived from it against the changed paths — the first tier of
-// the owner resolution order (see resolveOwners). When it names nobody for any
-// touched path, the second tier — the author of the most recent prior commit to
-// a touched path, via LastToucher — is consulted instead. modules.yaml's owner:
-// is not in this chain; it only feeds module.owner (below).
-//
-// modules is the repo's .github/talooner/modules.yaml (facts.md, "module.*"),
-// read from the base branch like the ruleset so a fork PR cannot redefine what it
-// touches. An empty slice means the repo declared no modules, so every module.*
-// fact stays unset except the always-asserted module.touched_count, which reads 0
-// (facts.md, "module.touched_count").
-//
-// teams is the repo's .github/talooner/teams.yaml (facts.md, "team.*"), read
-// the same way; it is also what review.<team>.* asserts facts for, so a
-// logical name a ruleset requires review from is the same name it reads
-// review facts back on.
-//
-// arch is the repo's .github/talooner/architecture.yaml
-// (expert-review-system.md, Phase 1), read the same way; it overrides or
-// extends the built-in per-language layer conventions that decide which
-// code.* roll-up a touched file counts toward. An empty slice means the repo
-// declared no overrides — the built-in conventions decide alone.
-//
-// The returned []CodeUnit is every touched, classified unit (expert-review-
-// system.md, Phase 2) — the caller resolves each one's doc content from the
-// base branch and sends the result to the cluster as evaluate_pr's
-// code_units arg. PR does not fetch doc content itself: it has no base-ref
-// FileContent call to make, and every other base-branch read (ruleset,
-// modules.yaml, architecture.yaml) already happens one level up, in run.go.
 func PR(ctx context.Context, src Source, owner, repo string, number int, checks config.Checks, codeowners []byte, modules []config.Module, teams config.Teams, arch []config.ArchitectureRule) (Set, []CodeUnit, error) {
 	type prResult struct {
 		pr  *github.PullRequest
 		err error
 	}
 	prCh := make(chan prResult, 1)
-	// resolveCtx is cancelled when PR returns on any path, so the poll goroutine
-	// stops burning API quota once ChangedFiles or CommitChecks fails.
 	resolveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() {
@@ -114,8 +50,6 @@ func PR(ctx context.Context, src Source, owner, repo string, number int, checks 
 		return nil, nil, fmt.Errorf("extract pr.* facts for %s/%s#%d: no pull request returned", owner, repo, number)
 	}
 
-	// checks_pending is derived from the whole round of CI on the head sha, both
-	// check runs and commit statuses — a repo can use either, or neither.
 	ci, err := src.CommitChecks(ctx, owner, repo, pr.HeadSHA)
 	if err != nil {
 		return nil, nil, fmt.Errorf("extract pr.checks_pending for %s/%s#%d: %w", owner, repo, number, err)
@@ -149,43 +83,18 @@ func PR(ctx context.Context, src Source, owner, repo string, number int, checks 
 	s.Strings("pr.changed_files", changed)
 	s.Strings("pr.labels", pr.Labels)
 	s.Bool("pr.checks_pending", ci.Pending())
-	// pr.diff is the whole patch set, capped at github.DiffMaxBytes. Both facts
-	// are always asserted: a PR with no textual changes gets an empty diff and
-	// truncated false, which is honest — there is nothing to show. A diff the cap
-	// cut off gets truncated true so it never reads as complete (issue #9).
 	s.String("pr.diff", diff)
 	s.Bool("pr.diff_truncated", truncated)
-	// pr.new_dependencies / pr.upgraded_dependencies are the counts of dependencies
-	// added and version-bumped across recognised manifests, parsed from the diff
-	// C2 already fetched (facts.md, "pr.new_dependencies",
-	// "pr.upgraded_dependencies"). Both always asserted: a PR with none of either
-	// gets 0, which is the honest answer, not a dead extractor. Lockfile churn is
-	// excluded from both; a version bump counts toward upgraded, never new
-	// (issue #11). A manifest GitHub could not diff (binary, oversized) fails the
-	// whole extraction instead of a confident zero — same rule as every other
-	// extractor in this package (package comment).
 	newDeps, upgradedDeps, err := countDependencyChanges(diff, stats)
 	if err != nil {
 		return nil, nil, fmt.Errorf("extract pr.new_dependencies / pr.upgraded_dependencies for %s/%s#%d: %w", owner, repo, number, err)
 	}
 	s.Int("pr.new_dependencies", newDeps)
 	s.Int("pr.upgraded_dependencies", upgradedDeps)
-	// mergeable is the one fact GitHub computes asynchronously and returns null
-	// for until it has — the common case right after a push, which is when a run
-	// fires. A nil here is "GitHub has not said yet", which is omitted rather
-	// than asserted false: "we do not know" is not "there are conflicts"
-	// (facts.md, "pr.mergeable").
 	if pr.Mergeable != nil {
 		s.Bool("pr.mergeable", *pr.Mergeable)
 	}
 
-	// pr.tests_passing / pr.lint_passing read the same check runs and statuses
-	// C8 fetched for pr.checks_pending, filtered by the tenant's name patterns
-	// (facts.md). Each is asserted only when it has a determined value; the
-	// cases that leave it unset — no matching check, CI still running, or a
-	// check with a conclusion this build does not recognise — are deliberate
-	// omissions, not false, because a positive condition on an unset fact simply
-	// does not fire (facts.md, "Unset is false").
 	if v := derivePassing(ci.Runs, ci.Statuses, checks.Tests); v != nil {
 		s.Bool("pr.tests_passing", *v)
 	}
@@ -193,51 +102,24 @@ func PR(ctx context.Context, src Source, owner, repo string, number int, checks 
 		s.Bool("pr.lint_passing", *v)
 	}
 
-	// user.* facts (facts.md, "user.*"): user.author is pr.author for symmetry,
-	// user.reviewer the standing review request, user.owner / user.owners /
-	// user.last_toucher the CODEOWNERS/git-log-derived ownership. All read data
-	// already fetched here; the CODEOWNERS content is passed in rather than
-	// re-read.
 	if err := userFacts(ctx, src, s, owner, repo, pr, changed, codeowners); err != nil {
 		return nil, nil, fmt.Errorf("extract user.owner for %s/%s#%d: %w", owner, repo, number, err)
 	}
-	// module.* facts (facts.md, "module.*"): bound to the primary touched module
-	// by most changed lines, with module.touched_count always asserted. The file
-	// stats are already in hand from the ChangedFileStats fetch above.
 	moduleFacts(s, stats, modules)
-	// code.* facts (facts.md, "code.*"): the LLM-review gate
-	// (expert-review-system.md, Phase 1), plus the code_unit records
-	// themselves — Phase 2 sends these to the cluster as evaluate_pr's
-	// code_units arg.
 	units := architectureFacts(s, stats, diff, arch)
-	// review.* facts (facts.md, "review.*"): folded from the whole review
-	// history fetched above, against the touched paths and the team lookup
-	// table already read for the require resolver.
 	reviewFacts(s, pr.HeadSHA, reviews, changed, codeowners, teams, pr.Requested.Teams, owner)
 	return s, units, nil
 }
 
-// userFacts asserts the user.* namespace (facts.md, "user.*") into s.
 func userFacts(ctx context.Context, src Source, s Set, owner, repo string, pr *github.PullRequest, changed []string, codeowners []byte) error {
-	// user.author aliases pr.author for symmetry. Always asserted: a rule quoting
-	// user.author on a PR with no author is not a real case, but an omitted fact
-	// there would read as a dead extractor (facts.md, "Unset is false").
 	s.String("user.author", pr.Author)
 
-	// user.reviewer is the one standing review request, if any. The PR carries
-	// users and teams separately; a user login is preferred, then a team slug,
-	// because a rule that tags the reviewer wants a person when one is asked. Left
-	// unset when nothing is requested — that is the honest answer, not "".
 	if r := pr.Requested.Users; len(r) > 0 {
 		s.String("user.reviewer", r[0])
 	} else if t := pr.Requested.Teams; len(t) > 0 {
 		s.String("user.reviewer", t[0])
 	}
 
-	// user.owner / user.owners: CODEOWNERS is the first tier of the resolution
-	// order (facts.md, "user.owner"). A repo without CODEOWNERS, or one whose
-	// CODEOWNERS names no owner for any touched path, tries the second tier
-	// next rather than leaving the facts unset outright.
 	if len(codeowners) > 0 {
 		if primary, owners := resolveOwners(parseCodeowners(codeowners), changed); owners != nil {
 			s.String("user.owner", primary)
@@ -246,14 +128,6 @@ func userFacts(ctx context.Context, src Source, s Set, owner, repo string, pr *g
 		}
 	}
 
-	// Tier 2: the author of the most recent prior commit to a touched path,
-	// via LastToucher (facts.md, "user.owner"). It is a real API call — one per
-	// touched path, capped — so it only runs when tier 1 did not already
-	// answer. user.last_toucher is asserted alongside user.owner / user.owners
-	// exactly when this tier is what resolved them; it is not computed when
-	// CODEOWNERS already won, so a rule reading it should not expect it on
-	// every PR. Tier 3 is unset: not pr.author, for the same reason CODEOWNERS
-	// silence does not fall back to the author either.
 	toucher, err := src.LastToucher(ctx, owner, repo, pr.BaseSHA, changed)
 	if err != nil {
 		return fmt.Errorf("last toucher: %w", err)
@@ -266,20 +140,6 @@ func userFacts(ctx context.Context, src Source, s Set, owner, repo string, pr *g
 	return nil
 }
 
-// derivePassing turns the head sha's CI into one pass-gate fact for a set of
-// name patterns (tests or lint). It returns nil — the fact is left unset — when
-// the patterns match no check, when any matched check is still running, or when
-// any matched check has a conclusion neither success nor a recognised failure.
-// All matched checks completed as success reads true; any matched check failed
-// (or errored) reads false.
-//
-// Precedence, because a mixed set has to resolve one way: pending beats
-// everything (a gate must not fire while CI is in flight); a recognised failure
-// beats an unknown conclusion (a PR with one red test and one neutral test is
-// not passing); an unknown conclusion beats success-only (we do not claim
-// passing on a check whose outcome we cannot name). Failure winning over unknown
-// is the one call here: the alternative — unset on any unknown — would let a red
-// test go unblocked behind a neutral one.
 func derivePassing(runs []github.CheckRunReport, statuses []github.CommitStatus, patterns []string) *bool {
 	if len(patterns) == 0 {
 		return nil
@@ -330,9 +190,6 @@ func derivePassing(runs []github.CheckRunReport, statuses []github.CommitStatus,
 	return boolPtr(true)
 }
 
-// matchAny reports whether name matches any pattern. Patterns are
-// case-insensitive wildcards where "*" matches any characters, including a
-// slash, so "ci/*" matches "ci/build" and "*unit*" matches "my-unit-tests".
 func matchAny(patterns []string, name string) bool {
 	for _, p := range patterns {
 		if matchPattern(p, name) {
@@ -348,9 +205,6 @@ func matchPattern(pattern, name string) bool {
 	if !strings.Contains(pat, "*") {
 		return pat == lower
 	}
-	// Build an anchored regexp from the pattern: "*" becomes ".*", everything
-	// else is matched literally. Names are short and few, so compiling per call
-	// is cheaper than caching and keeps this free of state.
 	var b strings.Builder
 	b.WriteString("^")
 	for {
@@ -365,7 +219,6 @@ func matchPattern(pattern, name string) bool {
 	b.WriteString("$")
 	re, err := regexp.Compile(b.String())
 	if err != nil {
-		// An uncompilable pattern matches nothing rather than panicking a run.
 		return false
 	}
 	return re.MatchString(lower)

@@ -11,19 +11,6 @@ import (
 	"github.com/opentalon/talooner/internal/facts"
 )
 
-// Plan evaluates a live PR's base-branch ruleset in plan mode and renders the
-// actions that would fire to w — the CLI half of F4 (talooner rules plan
-// --repo --pr). It reads the ruleset, config.yaml, CODEOWNERS, modules.yaml
-// and teams.yaml the same way evaluate does, so a plan and the real run can
-// never see different facts for the same PR.
-//
-// Two things make "zero writes" true rather than merely conventional:
-// cluster.ModePlan, which the plugin answers through a response field a
-// caller cannot mistake for something executable (EvaluatePR itself refuses
-// a plan-mode response carrying actions); and action.Printing, the same
-// Executor interface the real run's registry uses, with every verb mapped to
-// a renderer instead of a GitHub call. Neither r.GitHub nor r.Cluster is ever
-// asked to write anything here.
 func (r Runner) Plan(ctx context.Context, owner, repo string, prNum int, w io.Writer) error {
 	if r.Log == nil {
 		r.Log = slog.New(slog.DiscardHandler)
@@ -67,9 +54,6 @@ func (r Runner) Plan(ctx context.Context, owner, repo string, prNum int, w io.Wr
 	if err != nil {
 		return err
 	}
-	// Doc-loading warnings are not surfaced here: this is a one-shot CLI
-	// render, not a run with a check run or sticky comment to carry them, and
-	// resolveCodeUnits already logs them.
 	codeUnits, _, err := r.resolveCodeUnits(ctx, owner, repo, pr.BaseRef, units, arch)
 	if err != nil {
 		return err
