@@ -18,7 +18,7 @@ var codeUnitArch = []config.ArchitectureRule{{Path: "unrelated/", Kind: "service
 // case facts.md calls out ("several units can share one doc").
 func TestResolveCodeUnitsFetchesASharedDocOnce(t *testing.T) {
 	gh := &fakeGitHub{docs: map[string]string{"docs/services/shared.md": "the shared contract"}}
-	r := Runner{GitHub: gh.client(t), Log: slog.New(slog.DiscardHandler)}
+	r := Runner{Host: gh.client(t), Log: slog.New(slog.DiscardHandler)}
 
 	units := []facts.CodeUnit{
 		{Kind: "service", Path: "internal/a", Important: true, DocRef: "docs/services/shared.md", DiffSlice: "diff-a"},
@@ -59,7 +59,7 @@ func TestResolveCodeUnitsFetchesASharedDocOnce(t *testing.T) {
 func TestResolveCodeUnitsWarnsOnceForASharedOversizedDoc(t *testing.T) {
 	big := strings.Repeat("x", (1<<20)+10) // over github's maxFileBytes
 	gh := &fakeGitHub{docs: map[string]string{"docs/services/shared.md": big}}
-	r := Runner{GitHub: gh.client(t), Log: slog.New(slog.DiscardHandler)}
+	r := Runner{Host: gh.client(t), Log: slog.New(slog.DiscardHandler)}
 
 	units := []facts.CodeUnit{
 		{Kind: "service", Path: "internal/a", Important: true, DocRef: "docs/services/shared.md", DiffSlice: "diff-a"},
@@ -89,7 +89,7 @@ func TestResolveCodeUnitsWarnsOnceForASharedOversizedDoc(t *testing.T) {
 // drops nothing else copied straight from facts.CodeUnit.
 func TestResolveCodeUnitsCarriesTestDiffSlice(t *testing.T) {
 	gh := &fakeGitHub{docs: map[string]string{"docs/services/auth.md": "the contract"}}
-	r := Runner{GitHub: gh.client(t), Log: slog.New(slog.DiscardHandler)}
+	r := Runner{Host: gh.client(t), Log: slog.New(slog.DiscardHandler)}
 
 	units := []facts.CodeUnit{
 		{Kind: "service", Path: "internal/auth", Important: true, DocRef: "docs/services/auth.md",
@@ -109,7 +109,7 @@ func TestResolveCodeUnitsCarriesTestDiffSlice(t *testing.T) {
 // with no fetch and no warning: this is a declared answer, not a problem.
 func TestResolveCodeUnitsSkipsAUnitWithNoDocRef(t *testing.T) {
 	gh := &fakeGitHub{}
-	r := Runner{GitHub: gh.client(t), Log: slog.New(slog.DiscardHandler)}
+	r := Runner{Host: gh.client(t), Log: slog.New(slog.DiscardHandler)}
 
 	units := []facts.CodeUnit{
 		{Kind: "model", Path: "legacy/thing.rb", Important: true, DocRef: "", DiffSlice: "diff"},
@@ -135,7 +135,7 @@ func TestResolveCodeUnitsSkipsAUnitWithNoDocRef(t *testing.T) {
 // GitHub calls at all rather than merely returning nothing.
 func TestResolveCodeUnitsNoopsWithoutArchitectureYaml(t *testing.T) {
 	gh := &fakeGitHub{docs: map[string]string{"docs/services/auth.md": "would be found if asked"}}
-	r := Runner{GitHub: gh.client(t), Log: slog.New(slog.DiscardHandler)}
+	r := Runner{Host: gh.client(t), Log: slog.New(slog.DiscardHandler)}
 
 	units := []facts.CodeUnit{
 		{Kind: "service", Path: "internal/auth", Important: true, DocRef: "docs/services/auth.md", DiffSlice: "diff"},

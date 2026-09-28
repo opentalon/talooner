@@ -7,38 +7,11 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/opentalon/talooner/internal/host"
 )
 
 const mergeablePollAttempts = 5
-
-type PullRequest struct {
-	Number       int
-	HeadSHA      string
-	BaseSHA      string
-	HeadRef      string
-	BaseRef      string
-	Author       string
-	Title        string
-	Body         string
-	State        string
-	Draft        bool
-	Merged       bool
-	IsFork       bool
-	Additions    int
-	Deletions    int
-	ChangedFiles int
-	Commits      int
-	Labels       []string
-	Mergeable    *bool
-	Assignees    []string
-	Requested    Reviewers
-}
-
-type FileStat struct {
-	Path      string
-	Additions int
-	Deletions int
-}
 
 type pullRequestPayload struct {
 	Number int `json:"number"`
@@ -76,7 +49,7 @@ type pullRequestPayload struct {
 	reviewersPayload
 }
 
-func (c *Client) PullRequest(ctx context.Context, owner, repo string, number int) (*PullRequest, error) {
+func (c *Client) PullRequest(ctx context.Context, owner, repo string, number int) (*host.PullRequest, error) {
 	if number <= 0 {
 		return nil, fmt.Errorf("pull request number must be positive, got %d", number)
 	}
@@ -93,7 +66,7 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, number int
 		return nil, fmt.Errorf("pull request %s/%s#%d came back with no head sha", owner, repo, number)
 	}
 
-	pr := &PullRequest{
+	pr := &host.PullRequest{
 		Number:       p.Number,
 		HeadSHA:      p.Head.SHA,
 		BaseSHA:      p.Base.SHA,
@@ -125,7 +98,7 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, number int
 	return pr, nil
 }
 
-func (c *Client) ResolveMergeable(ctx context.Context, owner, repo string, number int) (*PullRequest, error) {
+func (c *Client) ResolveMergeable(ctx context.Context, owner, repo string, number int) (*host.PullRequest, error) {
 	for attempt := 0; ; attempt++ {
 		pr, err := c.PullRequest(ctx, owner, repo, number)
 		if err != nil {
@@ -175,7 +148,7 @@ type fileStat struct {
 	Deletions int    `json:"deletions"`
 }
 
-func (c *Client) ChangedFileStats(ctx context.Context, owner, repo string, number int) ([]FileStat, error) {
+func (c *Client) ChangedFileStats(ctx context.Context, owner, repo string, number int) ([]host.FileStat, error) {
 	if number <= 0 {
 		return nil, fmt.Errorf("pull request number must be positive, got %d", number)
 	}
@@ -189,12 +162,12 @@ func (c *Client) ChangedFileStats(ctx context.Context, owner, repo string, numbe
 		return nil, fmt.Errorf("list changed files of %s/%s#%d: %w", owner, repo, number, err)
 	}
 
-	stats := make([]FileStat, 0, len(files))
+	stats := make([]host.FileStat, 0, len(files))
 	for _, f := range files {
 		if f.Filename == "" {
 			continue
 		}
-		stats = append(stats, FileStat{Path: f.Filename, Additions: f.Additions, Deletions: f.Deletions})
+		stats = append(stats, host.FileStat{Path: f.Filename, Additions: f.Additions, Deletions: f.Deletions})
 	}
 	return stats, nil
 }
@@ -217,7 +190,7 @@ func (c *Client) HasWriteAccess(ctx context.Context, owner, repo, login string) 
 		} `json:"user"`
 	}
 	if _, err := c.do(ctx, request{method: http.MethodGet, path: path}, &payload); err != nil {
-		if errors.Is(err, ErrNotFound) {
+		if errors.Is(err, host.ErrNotFound) {
 			return false, nil
 		}
 		return false, fmt.Errorf("check write access for %s on %s/%s: %w", login, owner, repo, err)

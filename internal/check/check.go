@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/opentalon/talooner/internal/action"
-	"github.com/opentalon/talooner/internal/github"
+	"github.com/opentalon/talooner/internal/host"
 )
 
 const Name = "talooner"
@@ -24,7 +24,7 @@ type Diagnostic struct {
 	Message string
 }
 
-func Decision(actions []action.Action, warnings []Warning, summary string, unitCount int) github.CheckRun {
+func Decision(actions []action.Action, warnings []Warning, summary string, unitCount int) host.CheckRun {
 	var blocked, approved bool
 	for _, a := range actions {
 		switch a.Verb {
@@ -35,19 +35,19 @@ func Decision(actions []action.Action, warnings []Warning, summary string, unitC
 		}
 	}
 
-	cr := github.CheckRun{Name: Name}
+	cr := host.CheckRun{Name: Name}
 	switch {
 	case blocked:
-		cr.Conclusion = github.ConclusionFailure
+		cr.Conclusion = host.ConclusionFailure
 		cr.Title = "Changes requested"
 	case approved:
-		cr.Conclusion = github.ConclusionSuccess
+		cr.Conclusion = host.ConclusionSuccess
 		cr.Title = "Approved"
 	case len(actions) > 0:
-		cr.Conclusion = github.ConclusionNeutral
+		cr.Conclusion = host.ConclusionNeutral
 		cr.Title = "Reviewed"
 	default:
-		cr.Conclusion = github.ConclusionSuccess
+		cr.Conclusion = host.ConclusionSuccess
 		cr.Title = "No issues found"
 	}
 
@@ -81,10 +81,10 @@ func Decision(actions []action.Action, warnings []Warning, summary string, unitC
 	return cr
 }
 
-func Broken(reason string, diags []Diagnostic) github.CheckRun {
-	cr := github.CheckRun{
+func Broken(reason string, diags []Diagnostic) host.CheckRun {
+	cr := host.CheckRun{
 		Name:       Name,
-		Conclusion: github.ConclusionNeutral,
+		Conclusion: host.ConclusionNeutral,
 		Title:      "Talooner could not review this pull request",
 	}
 
@@ -99,11 +99,11 @@ func Broken(reason string, diags []Diagnostic) github.CheckRun {
 	}
 	for _, d := range kept {
 		line := max(d.Line, 1)
-		cr.Annotations = append(cr.Annotations, github.Annotation{
+		cr.Annotations = append(cr.Annotations, host.Annotation{
 			Path:      d.Path,
 			StartLine: line,
 			EndLine:   line,
-			Level:     github.LevelFailure,
+			Level:     host.LevelFailure,
 			Title:     "Ruleset error",
 			Message:   annotationMessage(d),
 		})

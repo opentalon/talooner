@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/opentalon/talooner/internal/host"
 )
 
 const testMarker = "<!-- talooner:v1:verdict -->"
@@ -107,10 +109,10 @@ func (s *reviewServer) client(t *testing.T) *Client {
 	return c
 }
 
-func approval(marker string) Review {
-	return Review{
+func approval(marker string) host.Review {
+	return host.Review{
 		Marker:         marker,
-		Event:          ReviewApprove,
+		Event:          host.ReviewApprove,
 		Body:           "### Talooner approves\n",
 		CommitID:       "abc123",
 		DismissMessage: "no longer holds",
@@ -131,7 +133,7 @@ func TestSyncReviewSubmitsWhenNothingIsStanding(t *testing.T) {
 		t.Fatalf("reviews submitted = %d, want 1", len(s.submitted))
 	}
 	got := s.submitted[0]
-	if got.Event != ReviewApprove || got.CommitID != "abc123" {
+	if got.Event != host.ReviewApprove || got.CommitID != "abc123" {
 		t.Errorf("submitted %+v, want an APPROVE at abc123", got)
 	}
 	if !strings.HasPrefix(got.Body, testMarker) {
@@ -146,8 +148,8 @@ func TestSyncReviewSubmitsWhenNothingIsStanding(t *testing.T) {
 // same approval on every push costs every reviewer an email and says nothing.
 func TestSyncReviewLeavesAStandingVerdictAlone(t *testing.T) {
 	s := &reviewServer{existing: []reviewPayload{
-		{ID: 11, Body: "unrelated human review", State: StateApproved},
-		{ID: 12, Body: testMarker + "\napproved", State: StateApproved, CommitID: "old"},
+		{ID: 11, Body: "unrelated human review", State: host.StateApproved},
+		{ID: 12, Body: testMarker + "\napproved", State: host.StateApproved, CommitID: "old"},
 	}}
 
 	id, err := s.client(t).SyncReview(t.Context(), "opentalon", "talooner", 42, approval(testMarker))
@@ -168,11 +170,11 @@ func TestSyncReviewLeavesAStandingVerdictAlone(t *testing.T) {
 // standing, which is the permissive one to get wrong.
 func TestSyncReviewDismissesTheOppositeVerdictFirst(t *testing.T) {
 	s := &reviewServer{existing: []reviewPayload{
-		{ID: 12, Body: testMarker + "\napproved", State: StateApproved},
+		{ID: 12, Body: testMarker + "\napproved", State: host.StateApproved},
 	}}
 
 	rv := approval(testMarker)
-	rv.Event = ReviewRequestChanges
+	rv.Event = host.ReviewRequestChanges
 	rv.Body = "### Talooner requests changes\n"
 	if _, err := s.client(t).SyncReview(t.Context(), "opentalon", "talooner", 42, rv); err != nil {
 		t.Fatalf("SyncReview: %v", err)
@@ -192,7 +194,7 @@ func TestSyncReviewDismissesTheOppositeVerdictFirst(t *testing.T) {
 // submitted in its place.
 func TestSyncReviewWithNoEventRetracts(t *testing.T) {
 	s := &reviewServer{existing: []reviewPayload{
-		{ID: 12, Body: testMarker + "\napproved", State: StateApproved},
+		{ID: 12, Body: testMarker + "\napproved", State: host.StateApproved},
 	}}
 
 	rv := approval(testMarker)
@@ -215,7 +217,7 @@ func TestSyncReviewRetractingNothingIsNotAnError(t *testing.T) {
 	s := &reviewServer{existing: []reviewPayload{
 		{ID: 12, Body: testMarker + "\napproved", State: "DISMISSED"},
 		{ID: 13, Body: testMarker + "\nsome note", State: "COMMENTED"},
-		{ID: 14, Body: "a human's approval", State: StateApproved},
+		{ID: 14, Body: "a human's approval", State: host.StateApproved},
 	}}
 
 	rv := approval(testMarker)
@@ -232,8 +234,8 @@ func TestSyncReviewRetractingNothingIsNotAnError(t *testing.T) {
 // state converges instead of growing by one review per run.
 func TestSyncReviewKeepsOneAndDismissesTheRest(t *testing.T) {
 	s := &reviewServer{existing: []reviewPayload{
-		{ID: 12, Body: testMarker + "\napproved", State: StateApproved},
-		{ID: 13, Body: testMarker + "\napproved again", State: StateApproved},
+		{ID: 12, Body: testMarker + "\napproved", State: host.StateApproved},
+		{ID: 13, Body: testMarker + "\napproved again", State: host.StateApproved},
 	}}
 
 	id, err := s.client(t).SyncReview(t.Context(), "opentalon", "talooner", 42, approval(testMarker))
@@ -293,12 +295,12 @@ func TestSyncReviewSubmitFailureNamesThePermissionCause(t *testing.T) {
 // run rather than being papered over with a fresh review.
 func TestSyncReviewFailsWhenTheDismissalFails(t *testing.T) {
 	s := &reviewServer{
-		existing:      []reviewPayload{{ID: 12, Body: testMarker, State: StateApproved}},
+		existing:      []reviewPayload{{ID: 12, Body: testMarker, State: host.StateApproved}},
 		dismissStatus: http.StatusForbidden,
 	}
 
 	rv := approval(testMarker)
-	rv.Event = ReviewRequestChanges
+	rv.Event = host.ReviewRequestChanges
 	if _, err := s.client(t).SyncReview(t.Context(), "opentalon", "talooner", 42, rv); err == nil {
 		t.Fatal("SyncReview succeeded with a broken dismissal")
 	}
@@ -311,7 +313,7 @@ func TestSyncReviewFailsWhenTheDismissalFails(t *testing.T) {
 // call wanted, so a 404 there is not a failure.
 func TestSyncReviewToleratesAReviewThatDisappeared(t *testing.T) {
 	s := &reviewServer{
-		existing:      []reviewPayload{{ID: 12, Body: testMarker, State: StateApproved}},
+		existing:      []reviewPayload{{ID: 12, Body: testMarker, State: host.StateApproved}},
 		dismissStatus: http.StatusNotFound,
 	}
 
@@ -323,14 +325,14 @@ func TestSyncReviewToleratesAReviewThatDisappeared(t *testing.T) {
 }
 
 func TestSyncReviewRejectsUnperformableReviews(t *testing.T) {
-	tests := map[string]func(*Review){
-		"no marker":          func(rv *Review) { rv.Marker = "" },
-		"marker spans lines": func(rv *Review) { rv.Marker = "<!--\ntalooner -->" },
-		"no dismiss message": func(rv *Review) { rv.DismissMessage = "" },
-		"unknown event":      func(rv *Review) { rv.Event = "COMMENT" },
-		"no body":            func(rv *Review) { rv.Body = "  " },
-		"no commit id":       func(rv *Review) { rv.CommitID = "" },
-		"body forges the marker": func(rv *Review) {
+	tests := map[string]func(*host.Review){
+		"no marker":          func(rv *host.Review) { rv.Marker = "" },
+		"marker spans lines": func(rv *host.Review) { rv.Marker = "<!--\ntalooner -->" },
+		"no dismiss message": func(rv *host.Review) { rv.DismissMessage = "" },
+		"unknown event":      func(rv *host.Review) { rv.Event = "COMMENT" },
+		"no body":            func(rv *host.Review) { rv.Body = "  " },
+		"no commit id":       func(rv *host.Review) { rv.CommitID = "" },
+		"body forges the marker": func(rv *host.Review) {
 			rv.Body = "nice PR " + testMarker
 		},
 	}
@@ -360,7 +362,7 @@ func TestSyncReviewRejectsANonPositivePullRequest(t *testing.T) {
 // marker: it is the whole history a fact extractor folds to current state.
 func TestPullRequestReviewsReturnsEveryEntry(t *testing.T) {
 	s := &reviewServer{existing: []reviewPayload{
-		{ID: 1, State: StateApproved, CommitID: "abc", User: &reviewUser{Login: "alice", Type: "User"}},
+		{ID: 1, State: host.StateApproved, CommitID: "abc", User: &reviewUser{Login: "alice", Type: "User"}},
 		{ID: 2, State: "COMMENTED", User: &reviewUser{Login: "dependabot", Type: "Bot"}},
 	}}
 
@@ -371,7 +373,7 @@ func TestPullRequestReviewsReturnsEveryEntry(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("got %d reviews, want 2", len(got))
 	}
-	if got[0].Login != "alice" || got[0].Bot || got[0].State != StateApproved || got[0].CommitID != "abc" {
+	if got[0].Login != "alice" || got[0].Bot || got[0].State != host.StateApproved || got[0].CommitID != "abc" {
 		t.Errorf("got[0] = %+v, want alice's approval at abc", got[0])
 	}
 	if got[1].Login != "dependabot" || !got[1].Bot {

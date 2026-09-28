@@ -31,7 +31,7 @@ own LLM credentials. There is no hosted tier and no plan for one.
 
 ## Example
 
-A repo declares its policy in `.github/talooner/rules.tln`:
+A repo declares its policy in `.talooner/rules.tln`:
 
 ```talon
 define "small_change" {
@@ -157,7 +157,7 @@ three-valued semantics: [`docs/facts.md`](docs/facts.md).
 | `review.<name>.approved` | a CODEOWNERS-proxy member of that team approved at head sha |
 | `review.<name>.stale` | such an approval exists but at an old commit |
 
-### `module.*` — lookup against `.github/talooner/modules.yaml`
+### `module.*` — lookup against `.talooner/modules.yaml`
 
 | Fact | Solves |
 |---|---|
@@ -222,7 +222,7 @@ engine internals, fact scoping, `llm_review`, cluster deployment. Start with its
 | 10 | **Base-branch ruleset governs writes**; head-branch rulesets get read-only plan runs. |
 | 11 | **No dispatch actions.** `deploy_preview` / `screenshot` / `scan_dependencies` are not verbs. The tenant's CI does the work and POSTs the result to the facts API; rules react. |
 | 12 | **Two repos.** `talooner` (bot + CLI) and `talooner-plugin` (engine, fact store, proto). Separate concepts, separate versions. |
-| 13 | **Config lives in the reviewed repo**, at `.github/talooner/`. Policy is versioned, diffable, and testable like any other code. |
+| 13 | **Config lives in the reviewed repo**, at `.talooner/`. Policy is versioned, diffable, and testable like any other code. A repo still on the legacy `.github/talooner/` path keeps working — Talooner falls back to it and logs a deprecation warning. |
 | 14 | **Explicit invocation in v1** — `!talooner /review`. Nothing happens until asked; the PR is then subscribed to pushes. Doubly load-bearing under decision 1: `issue_comment` runs in base-repo context where the secrets exist, while a fork's `pull_request` event gets none. |
 | 15 | **One evaluation per PR.** `module.*` binds to the primary touched module, not N runs. |
 | 16 | **`user.*` namespace** for code ownership, resolved from CODEOWNERS then `modules.yaml`. Distinct from `pr.author`. |

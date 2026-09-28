@@ -5,10 +5,10 @@ import (
 	"strings"
 
 	"github.com/opentalon/talooner/internal/config"
-	"github.com/opentalon/talooner/internal/github"
+	"github.com/opentalon/talooner/internal/host"
 )
 
-func moduleFacts(s Set, files []github.FileStat, modules []config.Module) {
+func moduleFacts(s Set, files []host.FileStat, modules []config.Module) {
 	lines := make(map[string]int, len(modules))
 	touched := 0
 	for _, m := range modules {

@@ -210,7 +210,7 @@ extractor pattern.
   `app/models/`, `app/controllers/`, `app/services/`; Go: `internal/`, `cmd/`,
   package dirs), detected by manifest/file presence like `dependencies.go:97-148`
   dispatches by manifest. Override/extension via
-  `.github/talooner/architecture.yaml` (new `config.ParseArchitecture`, model on
+  `.talooner/architecture.yaml` (new `config.ParseArchitecture`, model on
   `config/modules.go:14-80`), read from the base branch in `run.go` alongside
   `modules.yaml` (`run/run.go:189-239`).
 - Wire into `facts.PR()` (`internal/facts/pr.go:66-183`): call
@@ -228,7 +228,7 @@ extractor pattern.
 > built (`talooner-plugin/docs/llm-review.md`) rather than the plan below: there is no
 > shared proto field, no separate `docs[]` field, and no unconditional doc loading.
 > `resolveCodeUnits` (`internal/run/run.go`) is gated on the repo having its own
-> `.github/talooner/architecture.yaml` — see `facts.md`, "`code.*` — the LLM-review
+> `.talooner/architecture.yaml` — see `facts.md`, "`code.*` — the LLM-review
 > gate" for why. Kept below for the design rationale that is still accurate: the doc
 > set, the base-branch read, and the skip-with-warning behavior for a doc that fails
 > to load.

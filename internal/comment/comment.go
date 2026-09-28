@@ -106,7 +106,7 @@ func NoRulesFired(sha string) string {
 func Plan(added, removed []action.Action, sha string) string {
 	var b strings.Builder
 	b.WriteString("### Talooner plan\n\n")
-	b.WriteString("This pull request's own `.github/talooner/rules.tln` was evaluated for " +
+	b.WriteString("This pull request's own Talooner ruleset was evaluated for " +
 		"comparison only. The base branch's ruleset is what governs writes " +
 		"(architecture.md, \"Fork safety\"); nothing below was performed.\n\n")
 	if len(added) > 0 {

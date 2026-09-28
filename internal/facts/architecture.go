@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/opentalon/talooner/internal/config"
-	"github.com/opentalon/talooner/internal/github"
+	"github.com/opentalon/talooner/internal/host"
 )
 
 type CodeUnit struct {
@@ -37,7 +37,7 @@ var docSuffixes = map[string]string{
 	"service":    "_service",
 }
 
-func architectureFacts(s Set, files []github.FileStat, diff string, arch []config.ArchitectureRule) []CodeUnit {
+func architectureFacts(s Set, files []host.FileStat, diff string, arch []config.ArchitectureRule) []CodeUnit {
 	slices := diffSlicesByPath(diff)
 
 	type unit struct {

@@ -25,8 +25,8 @@ Usage:
   talooner cluster whoami
   talooner init --repo <owner/name> [--org <org>]
   talooner onboard --repo <owner/name> [--base <branch>] [--branch <branch>] [--force] [--no-pr]
-  talooner rules validate <path-to-.github/talooner>
-  talooner rules test <path-to-.github/talooner>
+  talooner rules validate <path-to-.talooner>
+  talooner rules test <path-to-.talooner>
   talooner rules plan --repo <owner/name> --pr <number>
   talooner version
 `

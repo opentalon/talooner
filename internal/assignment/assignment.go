@@ -11,7 +11,7 @@ import (
 	"github.com/opentalon/talooner/internal/action"
 	"github.com/opentalon/talooner/internal/comment"
 	"github.com/opentalon/talooner/internal/config"
-	"github.com/opentalon/talooner/internal/github"
+	"github.com/opentalon/talooner/internal/host"
 )
 
 var (
@@ -27,28 +27,19 @@ type Set struct {
 	Teams     []string
 }
 
-type Writer interface {
-	CommentBody(ctx context.Context, owner, repo string, number int, marker string) (string, error)
-	UpsertComment(ctx context.Context, owner, repo string, number int, s github.StickyComment) (int64, error)
-	AddAssignees(ctx context.Context, owner, repo string, number int, logins []string) ([]string, error)
-	RemoveAssignees(ctx context.Context, owner, repo string, number int, logins []string) ([]string, error)
-	RequestReviewers(ctx context.Context, owner, repo string, number int, users, teams []string) (github.Reviewers, error)
-	RemoveReviewRequests(ctx context.Context, owner, repo string, number int, users, teams []string) (github.Reviewers, error)
-}
-
 type Syncer struct {
-	gh      Writer
+	gh      host.Writer
 	owner   string
 	repo    string
 	number  int
-	current github.Reviewers
+	current host.Reviewers
 	held    []string
 	want    Set
 	log     *slog.Logger
 	done    bool
 }
 
-func New(gh Writer, owner, repo string, number int, pr *github.PullRequest,
+func New(gh host.Writer, owner, repo string, number int, pr *host.PullRequest,
 	actions []action.Action, teams config.Teams, log *slog.Logger,
 ) (*Syncer, error) {
 	if log == nil {
@@ -157,7 +148,7 @@ func (s *Syncer) Sync(ctx context.Context) error {
 
 	prev := s.ledger(ctx)
 	assigned := clone(s.held)
-	standing := github.Reviewers{Users: clone(s.current.Users), Teams: clone(s.current.Teams)}
+	standing := host.Reviewers{Users: clone(s.current.Users), Teams: clone(s.current.Teams)}
 	owned := prev
 	var problems []error
 
@@ -250,7 +241,7 @@ func (s *Syncer) writeLedger(ctx context.Context, prev, next Ledger) error {
 	if next.equal(prev) {
 		return nil
 	}
-	id, err := s.gh.UpsertComment(ctx, s.owner, s.repo, s.number, github.StickyComment{
+	id, err := s.gh.UpsertComment(ctx, s.owner, s.repo, s.number, host.StickyComment{
 		Marker:   comment.Marker(comment.TopicState),
 		Body:     LedgerBody(next),
 		EditOnly: next.isEmpty(),

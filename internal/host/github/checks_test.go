@@ -7,21 +7,23 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/opentalon/talooner/internal/host"
 )
 
 func TestChecksPending(t *testing.T) {
 	for _, tt := range []struct {
 		name string
-		c    Checks
+		c    host.Checks
 		want bool
 	}{
-		{"queued check run", Checks{Runs: []CheckRunReport{{Status: "queued"}}}, true},
-		{"in_progress check run", Checks{Runs: []CheckRunReport{{Status: "in_progress"}}}, true},
-		{"completed check run", Checks{Runs: []CheckRunReport{{Status: "completed", Conclusion: "success"}}}, false},
-		{"pending commit status", Checks{Statuses: []CommitStatus{{State: "pending"}}}, true},
-		{"success commit status", Checks{Statuses: []CommitStatus{{State: "success"}}}, false},
-		{"nothing at all", Checks{}, false},
-		{"queued run plus settled status", Checks{Runs: []CheckRunReport{{Status: "queued"}}, Statuses: []CommitStatus{{State: "success"}}}, true},
+		{"queued check run", host.Checks{Runs: []host.CheckRunReport{{Status: "queued"}}}, true},
+		{"in_progress check run", host.Checks{Runs: []host.CheckRunReport{{Status: "in_progress"}}}, true},
+		{"completed check run", host.Checks{Runs: []host.CheckRunReport{{Status: "completed", Conclusion: "success"}}}, false},
+		{"pending commit status", host.Checks{Statuses: []host.CommitStatus{{State: "pending"}}}, true},
+		{"success commit status", host.Checks{Statuses: []host.CommitStatus{{State: "success"}}}, false},
+		{"nothing at all", host.Checks{}, false},
+		{"queued run plus settled status", host.Checks{Runs: []host.CheckRunReport{{Status: "queued"}}, Statuses: []host.CommitStatus{{State: "success"}}}, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.c.Pending(); got != tt.want {

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/opentalon/talooner/internal/action"
-	"github.com/opentalon/talooner/internal/github"
+	"github.com/opentalon/talooner/internal/host"
 )
 
 func act(v action.Verb) action.Action {
@@ -27,19 +27,19 @@ func TestDecisionConclusions(t *testing.T) {
 		actions []action.Action
 		want    string
 	}{
-		{"a block fired", []action.Action{act(action.VerbBlock)}, github.ConclusionFailure},
-		{"an approve fired", []action.Action{act(action.VerbApprove)}, github.ConclusionSuccess},
-		{"nothing decisive", []action.Action{act(action.VerbComment)}, github.ConclusionNeutral},
-		{"no rule fired", nil, github.ConclusionSuccess},
+		{"a block fired", []action.Action{act(action.VerbBlock)}, host.ConclusionFailure},
+		{"an approve fired", []action.Action{act(action.VerbApprove)}, host.ConclusionSuccess},
+		{"nothing decisive", []action.Action{act(action.VerbComment)}, host.ConclusionNeutral},
+		{"no rule fired", nil, host.ConclusionSuccess},
 		{
 			"an unresolved tie is a failure, not a success",
 			[]action.Action{act(action.VerbApprove), act(action.VerbBlock)},
-			github.ConclusionFailure,
+			host.ConclusionFailure,
 		},
 		{
 			"order does not change the tiebreak",
 			[]action.Action{act(action.VerbBlock), act(action.VerbApprove)},
-			github.ConclusionFailure,
+			host.ConclusionFailure,
 		},
 	}
 
@@ -126,7 +126,7 @@ func TestBrokenIsAlwaysNeutral(t *testing.T) {
 		{{Path: "rules.tln", Line: 4, Column: 9, Message: "unexpected token"}},
 	} {
 		cr := Broken("evaluate opentalon/talooner#42: ruleset would not compile", diags)
-		if cr.Conclusion != github.ConclusionNeutral {
+		if cr.Conclusion != host.ConclusionNeutral {
 			t.Fatalf("conclusion = %q, want neutral", cr.Conclusion)
 		}
 		if !strings.Contains(cr.Summary, "would not compile") {
@@ -157,7 +157,7 @@ func TestBrokenPinsDiagnosticsToTheirLines(t *testing.T) {
 		t.Errorf("unplaceable diagnostic landed on line %d, want 1", cr.Annotations[1].StartLine)
 	}
 	for _, a := range cr.Annotations {
-		if a.Level != github.LevelFailure {
+		if a.Level != host.LevelFailure {
 			t.Errorf("annotation level = %q, want failure", a.Level)
 		}
 	}

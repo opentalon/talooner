@@ -8,18 +8,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
-)
 
-const (
-	ConclusionSuccess = "success"
-	ConclusionFailure = "failure"
-	ConclusionNeutral = "neutral"
-)
-
-const (
-	LevelNotice  = "notice"
-	LevelWarning = "warning"
-	LevelFailure = "failure"
+	"github.com/opentalon/talooner/internal/host"
 )
 
 const maxAnnotations = 50
@@ -27,38 +17,18 @@ const maxAnnotations = 50
 const maxAnnotationBatches = 10
 
 var conclusions = map[string]bool{
-	ConclusionSuccess: true,
-	ConclusionFailure: true,
-	ConclusionNeutral: true,
+	host.ConclusionSuccess: true,
+	host.ConclusionFailure: true,
+	host.ConclusionNeutral: true,
 }
 
 var levels = map[string]bool{
-	LevelNotice:  true,
-	LevelWarning: true,
-	LevelFailure: true,
+	host.LevelNotice:  true,
+	host.LevelWarning: true,
+	host.LevelFailure: true,
 }
 
-type Annotation struct {
-	Path      string
-	StartLine int
-	EndLine   int
-	Level     string
-	Title     string
-	Message   string
-}
-
-type CheckRun struct {
-	Name        string
-	HeadSHA     string
-	Conclusion  string
-	Title       string
-	Summary     string
-	Text        string
-	DetailsURL  string
-	Annotations []Annotation
-}
-
-func (cr CheckRun) validate() error {
+func validateCheckRun(cr host.CheckRun) error {
 	if strings.TrimSpace(cr.Name) == "" {
 		return fmt.Errorf("check run needs a name")
 	}
@@ -72,14 +42,14 @@ func (cr CheckRun) validate() error {
 		return fmt.Errorf("check run %s needs a title and a summary", cr.Name)
 	}
 	for i, a := range cr.Annotations {
-		if err := a.validate(); err != nil {
+		if err := validateAnnotation(a); err != nil {
 			return fmt.Errorf("check run %s, annotation %d: %w", cr.Name, i, err)
 		}
 	}
 	return nil
 }
 
-func (a Annotation) validate() error {
+func validateAnnotation(a host.Annotation) error {
 	if strings.TrimSpace(a.Path) == "" {
 		return fmt.Errorf("annotation needs a path")
 	}
@@ -124,8 +94,8 @@ type checkRunPayload struct {
 	Output      *outputPayload `json:"output"`
 }
 
-func (c *Client) UpsertCheckRun(ctx context.Context, owner, repo string, cr CheckRun) (int64, error) {
-	if err := cr.validate(); err != nil {
+func (c *Client) UpsertCheckRun(ctx context.Context, owner, repo string, cr host.CheckRun) (int64, error) {
+	if err := validateCheckRun(cr); err != nil {
 		return 0, err
 	}
 
@@ -191,7 +161,7 @@ func (c *Client) UpsertCheckRun(ctx context.Context, owner, repo string, cr Chec
 	return written.ID, nil
 }
 
-func (c *Client) appendAnnotations(ctx context.Context, owner, repo string, id int64, cr CheckRun, batch []annotationPayload) error {
+func (c *Client) appendAnnotations(ctx context.Context, owner, repo string, id int64, cr host.CheckRun, batch []annotationPayload) error {
 	path, err := repoPath(owner, repo, "check-runs", fmt.Sprint(id))
 	if err != nil {
 		return err
@@ -244,7 +214,7 @@ func (c *Client) findCheckRun(ctx context.Context, owner, repo, name, sha string
 	return id, nil
 }
 
-func batchAnnotations(as []Annotation) [][]annotationPayload {
+func batchAnnotations(as []host.Annotation) [][]annotationPayload {
 	var batches [][]annotationPayload
 	for i := 0; i < len(as) && len(batches) < maxAnnotationBatches; i += maxAnnotations {
 		batch := as[i:min(i+maxAnnotations, len(as))]

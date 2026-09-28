@@ -5,12 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-)
 
-type Reviewers struct {
-	Users []string
-	Teams []string
-}
+	"github.com/opentalon/talooner/internal/host"
+)
 
 type reviewersPayload struct {
 	Users []struct {
@@ -21,8 +18,8 @@ type reviewersPayload struct {
 	} `json:"requested_teams"`
 }
 
-func (p reviewersPayload) reviewers() Reviewers {
-	var rv Reviewers
+func (p reviewersPayload) reviewers() host.Reviewers {
+	var rv host.Reviewers
 	for _, u := range p.Users {
 		if u.Login != "" {
 			rv.Users = append(rv.Users, u.Login)
@@ -85,36 +82,36 @@ func (c *Client) writeAssignees(ctx context.Context, method, owner, repo string,
 	return payload.logins(), nil
 }
 
-func (c *Client) RequestReviewers(ctx context.Context, owner, repo string, number int, users, teams []string) (Reviewers, error) {
+func (c *Client) RequestReviewers(ctx context.Context, owner, repo string, number int, users, teams []string) (host.Reviewers, error) {
 	return c.writeReviewRequests(ctx, http.MethodPost, owner, repo, number, users, teams)
 }
 
-func (c *Client) RemoveReviewRequests(ctx context.Context, owner, repo string, number int, users, teams []string) (Reviewers, error) {
+func (c *Client) RemoveReviewRequests(ctx context.Context, owner, repo string, number int, users, teams []string) (host.Reviewers, error) {
 	return c.writeReviewRequests(ctx, http.MethodDelete, owner, repo, number, users, teams)
 }
 
-func (c *Client) writeReviewRequests(ctx context.Context, method, owner, repo string, number int, users, teams []string) (Reviewers, error) {
+func (c *Client) writeReviewRequests(ctx context.Context, method, owner, repo string, number int, users, teams []string) (host.Reviewers, error) {
 	if number <= 0 {
-		return Reviewers{}, fmt.Errorf("pull request number must be positive, got %d", number)
+		return host.Reviewers{}, fmt.Errorf("pull request number must be positive, got %d", number)
 	}
 	if len(users) == 0 && len(teams) == 0 {
-		return Reviewers{}, fmt.Errorf("no reviewers to %s on %s/%s#%d", verbOf(method), owner, repo, number)
+		return host.Reviewers{}, fmt.Errorf("no reviewers to %s on %s/%s#%d", verbOf(method), owner, repo, number)
 	}
 	path, err := repoPath(owner, repo, "pulls", fmt.Sprint(number), "requested_reviewers")
 	if err != nil {
-		return Reviewers{}, err
+		return host.Reviewers{}, err
 	}
 	raw, err := json.Marshal(struct {
 		Reviewers     []string `json:"reviewers"`
 		TeamReviewers []string `json:"team_reviewers"`
 	}{Reviewers: users, TeamReviewers: teams})
 	if err != nil {
-		return Reviewers{}, fmt.Errorf("encode review requests for %s/%s#%d: %w", owner, repo, number, err)
+		return host.Reviewers{}, fmt.Errorf("encode review requests for %s/%s#%d: %w", owner, repo, number, err)
 	}
 
 	var payload reviewersPayload
 	if _, err := c.do(ctx, request{method: method, path: path, body: raw}, &payload); err != nil {
-		return Reviewers{}, fmt.Errorf("%s review requests (users %v, teams %v) on %s/%s#%d: %w",
+		return host.Reviewers{}, fmt.Errorf("%s review requests (users %v, teams %v) on %s/%s#%d: %w",
 			verbOf(method), users, teams, owner, repo, number, err)
 	}
 	return payload.reviewers(), nil

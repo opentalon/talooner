@@ -40,7 +40,7 @@ func TestCreateBranchPropagatesFailure(t *testing.T) {
 
 func TestCommitAndPushStagesOnlyGivenPaths(t *testing.T) {
 	r := &fakeGitRunner{}
-	paths := []string{".github/talooner/rules.tln", ".github/talooner/rules.tln.test"}
+	paths := []string{".talooner/rules.tln", ".talooner/rules.tln.test"}
 	if err := CommitAndPush(context.Background(), r, "talooner-onboarding", "Add Talooner ruleset", paths); err != nil {
 		t.Fatalf("CommitAndPush: %v", err)
 	}

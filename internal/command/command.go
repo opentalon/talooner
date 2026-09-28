@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/opentalon/talooner/internal/host"
 )
 
 const DefaultHandle = "!talooner"
@@ -122,11 +124,7 @@ func indentColumns(line string) int {
 	return n
 }
 
-type PermissionChecker interface {
-	HasWriteAccess(ctx context.Context, owner, repo, login string) (bool, error)
-}
-
-func Authorize(ctx context.Context, c PermissionChecker, owner, repo, login string) error {
+func Authorize(ctx context.Context, c host.PermissionChecker, owner, repo, login string) error {
 	if login == "" {
 		return errors.New("cannot authorize a command with no actor")
 	}

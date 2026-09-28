@@ -45,7 +45,7 @@ design simply doesn't exist.
   site.
 - The run fails fast if the cluster key is absent or `whoami` fails. No degraded
   mode where it silently reviews without the engine.
-- `.github/talooner/*.yaml` in a tenant repo is attacker-controllable on a fork
+- `.talooner/*.yaml` in a tenant repo is attacker-controllable on a fork
   PR. It is parsed as data only — no credential fields, no URLs the runner will
   authenticate to, no path escapes above the repo root. The credential-field
   check walks the raw YAML document rather than the typed struct it decodes
@@ -162,8 +162,8 @@ talooner init --repo acme/api
 talooner onboard --repo acme/api
 
 # 4. author and validate rules — all local, no cluster writes
-talooner rules validate .github/talooner/
-talooner rules test .github/talooner/         # runs .tln.test files
+talooner rules validate .talooner/
+talooner rules test .talooner/         # runs .tln.test files
 talooner rules plan --repo acme/api --pr 42   # dry-run against a live PR
 ```
 
@@ -211,7 +211,7 @@ unit-tests its review policy in its own CI, with synthetic PR facts, before that
 policy ever gates a real PR.
 
 ```
-.github/talooner/
+.talooner/
   rules.tln
   rules.tln.test
   config.yaml
@@ -225,7 +225,7 @@ has tests" is a claim no LLM-based reviewer can make.
 ## Fork PRs and untrusted input
 
 Attacker-controlled on a fork PR: the diff, the title, the body, the branch
-name, every file under `.github/talooner/`, and the workflow file on the head
+name, every file under `.talooner/`, and the workflow file on the head
 branch. Consequences:
 
 - Ruleset governing **writes** comes from the base branch, always

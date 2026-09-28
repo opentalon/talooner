@@ -141,8 +141,8 @@ cd <local clone of the target repo>
 talooner onboard --repo <owner/name>
 ```
 
-`onboard` writes `.github/workflows/talooner.yml`, `.github/talooner/rules.tln`,
-and `.github/talooner/rules.tln.test`, then commits, pushes, and opens a PR —
+`onboard` writes `.github/workflows/talooner.yml`, `.talooner/rules.tln`,
+and `.talooner/rules.tln.test`, then commits, pushes, and opens a PR —
 nothing lands on the default branch without review.
 
 ### Hand-fixes needed on top of `onboard`
@@ -155,7 +155,7 @@ real published tag instead (check `git tag --list` in `talooner` — currently
 bumped by hand for every new prerelease until `v1` exists; nothing tracks it
 automatically.
 
-**2. `.github/talooner/config.yaml` — not written by `onboard`.**
+**2. `.talooner/config.yaml` — not written by `onboard`.**
 Without it, `pr.tests_passing` and `pr.lint_passing` are never set (they
 require the tenant to declare which CI check names to match), so any rule
 conditioned on them silently never fires. Add it by hand, naming your repo's
@@ -191,8 +191,8 @@ check the wrong one:
 All local, no cluster writes:
 
 ```bash
-talooner rules validate .github/talooner/       # compiles the ruleset
-talooner rules test .github/talooner/           # runs rules.tln.test
+talooner rules validate .talooner/       # compiles the ruleset
+talooner rules test .talooner/           # runs rules.tln.test
 talooner rules plan --repo <owner/name> --pr <n>  # dry-run against a live PR, zero writes
 ```
 
@@ -224,7 +224,7 @@ PR, updated in place (never duplicated) on every push and re-trigger.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Check run says "no rules fired" or reports success with nothing matched, but a rule should have fired | `.github/talooner/config.yaml` missing or its `checks:` names don't match your real CI job names | Add/fix `config.yaml` (Part 2) |
+| Check run says "no rules fired" or reports success with nothing matched, but a rule should have fired | `.talooner/config.yaml` missing or its `checks:` names don't match your real CI job names | Add/fix `config.yaml` (Part 2) |
 | Check run reads `TAL-E-REVIEW-PERM`, review never posts, comment/check still work | "Allow GitHub Actions to create and approve pull requests" is off | Part 2, "The other prerequisite" |
 | `uses: opentalon/talooner@v1` fails to resolve | `v1` doesn't exist as a tag yet | Pin a real tag or commit sha instead (Part 2) |
 | `talooner init` fails with "no stored credentials" | `cluster login` wasn't run, or was run in a different environment | `talooner cluster login` again, same machine/CI you're running `init` from |

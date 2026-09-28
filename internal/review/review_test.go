@@ -7,17 +7,17 @@ import (
 	"testing"
 
 	"github.com/opentalon/talooner/internal/action"
-	"github.com/opentalon/talooner/internal/github"
+	"github.com/opentalon/talooner/internal/host"
 )
 
 // fakeSubmitter records the reviews a run asked for, so a test can assert that
 // two verbs produced one write.
 type fakeSubmitter struct {
-	got []github.Review
+	got []host.Review
 	err error
 }
 
-func (f *fakeSubmitter) SyncReview(_ context.Context, _, _ string, _ int, rv github.Review) (int64, error) {
+func (f *fakeSubmitter) SyncReview(_ context.Context, _, _ string, _ int, rv host.Review) (int64, error) {
 	f.got = append(f.got, rv)
 	if f.err != nil {
 		return 0, f.err
@@ -32,17 +32,17 @@ func TestVerdict(t *testing.T) {
 		actions []action.Action
 		want    string
 	}{
-		"approve":       {[]action.Action{act(action.VerbApprove)}, github.ReviewApprove},
-		"block":         {[]action.Action{act(action.VerbBlock)}, github.ReviewRequestChanges},
+		"approve":       {[]action.Action{act(action.VerbApprove)}, host.ReviewApprove},
+		"block":         {[]action.Action{act(action.VerbBlock)}, host.ReviewRequestChanges},
 		"neither":       {[]action.Action{act(action.VerbComment)}, ""},
 		"nothing fired": {nil, ""},
 		"tie, approve first": {
 			[]action.Action{act(action.VerbApprove), act(action.VerbBlock)},
-			github.ReviewRequestChanges,
+			host.ReviewRequestChanges,
 		},
 		"tie, block first": {
 			[]action.Action{act(action.VerbBlock), act(action.VerbApprove)},
-			github.ReviewRequestChanges,
+			host.ReviewRequestChanges,
 		},
 	}
 	for name, tc := range tests {
@@ -58,7 +58,7 @@ func TestVerdict(t *testing.T) {
 // moments later would be two emails to every reviewer for one decision.
 func TestExecuteWritesOnceForTheWholeSet(t *testing.T) {
 	f := &fakeSubmitter{}
-	w := New(f, "opentalon", "talooner", 42, "abc123", github.ReviewRequestChanges, nil)
+	w := New(f, "opentalon", "talooner", 42, "abc123", host.ReviewRequestChanges, nil)
 
 	actions := []action.Action{act(action.VerbApprove), act(action.VerbBlock)}
 	for _, a := range actions {
@@ -72,7 +72,7 @@ func TestExecuteWritesOnceForTheWholeSet(t *testing.T) {
 	if len(f.got) != 1 {
 		t.Fatalf("reviews written = %d, want 1: %+v", len(f.got), f.got)
 	}
-	if f.got[0].Event != github.ReviewRequestChanges {
+	if f.got[0].Event != host.ReviewRequestChanges {
 		t.Errorf("event = %q, want block to win", f.got[0].Event)
 	}
 	if f.got[0].CommitID != "abc123" || f.got[0].Marker != Marker() {
@@ -102,7 +102,7 @@ func TestSyncRetractsWhenNoVerbFired(t *testing.T) {
 
 func TestExecuteRefusesAVerbItDoesNotPerform(t *testing.T) {
 	f := &fakeSubmitter{}
-	w := New(f, "opentalon", "talooner", 42, "abc123", github.ReviewApprove, nil)
+	w := New(f, "opentalon", "talooner", 42, "abc123", host.ReviewApprove, nil)
 
 	err := w.Execute(t.Context(), act(action.VerbAssign))
 	if !errors.Is(err, action.ErrUnknownVerb) {
@@ -115,7 +115,7 @@ func TestExecuteRefusesAVerbItDoesNotPerform(t *testing.T) {
 
 func TestSyncReportsAFailedWrite(t *testing.T) {
 	f := &fakeSubmitter{err: errors.New("resource not accessible by integration")}
-	w := New(f, "opentalon", "talooner", 42, "abc123", github.ReviewApprove, nil)
+	w := New(f, "opentalon", "talooner", 42, "abc123", host.ReviewApprove, nil)
 
 	if err := w.Sync(t.Context()); err == nil {
 		t.Fatal("Sync succeeded with a failing write")
@@ -126,14 +126,14 @@ func TestSyncReportsAFailedWrite(t *testing.T) {
 // fork PR's title to forge — and a review body cannot be edited to a resolved
 // state the way a sticky comment can.
 func TestBody(t *testing.T) {
-	approve := Body(github.ReviewApprove, "abc123def456789")
+	approve := Body(host.ReviewApprove, "abc123def456789")
 	if !strings.Contains(approve, "advisory") {
 		t.Error("the approval does not say it is advisory")
 	}
 	if !strings.Contains(approve, "abc123def456") || strings.Contains(approve, "789") {
 		t.Errorf("approval body does not carry the short sha: %q", approve)
 	}
-	if strings.Contains(Body(github.ReviewRequestChanges, "abc123"), "advisory") {
+	if strings.Contains(Body(host.ReviewRequestChanges, "abc123"), "advisory") {
 		t.Error("a request for changes is not advisory in the same sense; say nothing rather than the wrong thing")
 	}
 	if got := Body("", "abc123"); got != "" {
