@@ -11,18 +11,37 @@ type codeownerRule struct {
 	owners  []string
 }
 
+// GitLab CODEOWNERS sections: "[Name]", "^[Name]" (optional section), and
+// "[Name][N]" (N required approvals) headers, each optionally followed by
+// default owners for entries in that section that list none of their own.
+// GitHub's CODEOWNERS format has no section syntax, so a plain file never
+// matches this and falls through to the entry branch unchanged.
+var sectionHeaderPattern = regexp.MustCompile(`^\^?\[[^\]]*\](?:\[\d+\])?(?:\s+(.*))?$`)
+
 func parseCodeowners(data []byte) []codeownerRule {
 	var rules []codeownerRule
+	var sectionDefaults []string
 	for _, raw := range strings.Split(string(data), "\n") {
 		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
+		if m := sectionHeaderPattern.FindStringSubmatch(line); m != nil {
+			sectionDefaults = strings.Fields(m[1])
 			continue
 		}
-		rules = append(rules, codeownerRule{pattern: fields[0], owners: fields[1:]})
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		owners := fields[1:]
+		if len(owners) == 0 {
+			owners = sectionDefaults
+		}
+		if len(owners) == 0 {
+			continue
+		}
+		rules = append(rules, codeownerRule{pattern: fields[0], owners: owners})
 	}
 	return rules
 }
