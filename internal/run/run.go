@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 
 	"github.com/opentalon/talooner-plugin/proto/taloonerpb"
 
@@ -16,9 +17,11 @@ import (
 	"github.com/opentalon/talooner/internal/comment"
 	"github.com/opentalon/talooner/internal/config"
 	"github.com/opentalon/talooner/internal/event"
+	gitlabevent "github.com/opentalon/talooner/internal/event/gitlab"
 	"github.com/opentalon/talooner/internal/facts"
 	"github.com/opentalon/talooner/internal/host"
 	"github.com/opentalon/talooner/internal/host/github"
+	"github.com/opentalon/talooner/internal/host/gitlab"
 	"github.com/opentalon/talooner/internal/review"
 )
 
@@ -712,17 +715,6 @@ func (r reported) Error() string { return r.err.Error() }
 func (r reported) Unwrap() error { return r.err }
 
 func Main(ctx context.Context, log *slog.Logger) int {
-	ev, err := event.FromEnv()
-	if err != nil {
-		if event.Skip(err) {
-			log.Info("nothing to do for this event", "reason", err)
-			return 0
-		}
-		log.Error("read event", "err", err)
-		return 1
-	}
-	log = log.With("repo", ev.Owner+"/"+ev.Repo, "pr", ev.PR, "trigger", ev.Trigger)
-
 	cl, err := cluster.DialFromEnv(ctx, cluster.WithLogger(log))
 	if err != nil {
 		log.Error("cannot reach the cluster", "err", err)
@@ -730,15 +722,48 @@ func Main(ctx context.Context, log *slog.Logger) int {
 	}
 	defer cl.Close() //nolint:errcheck
 
-	gh, err := github.NewFromEnv(github.WithLogger(log), github.WithSecrets(cl.APIKey()))
-	if err != nil {
-		log.Error("build github client", "err", err)
-		return 1
+	var (
+		h  host.Host
+		ev *event.Event
+	)
+	if os.Getenv("CI_PIPELINE_SOURCE") != "" {
+		gl, err := gitlab.NewFromEnv(gitlab.WithLogger(log), gitlab.WithSecrets(cl.APIKey()))
+		if err != nil {
+			log.Error("build gitlab client", "err", err)
+			return 1
+		}
+		h = gl
+		ev, err = gitlabevent.FromEnv(ctx, gl)
+		if err != nil {
+			if event.Skip(err) {
+				log.Info("nothing to do for this event", "reason", err)
+				return 0
+			}
+			log.Error("read event", "err", err)
+			return 1
+		}
+	} else {
+		gh, err := github.NewFromEnv(github.WithLogger(log), github.WithSecrets(cl.APIKey()))
+		if err != nil {
+			log.Error("build github client", "err", err)
+			return 1
+		}
+		h = gh
+		ev, err = event.FromEnv()
+		if err != nil {
+			if event.Skip(err) {
+				log.Info("nothing to do for this event", "reason", err)
+				return 0
+			}
+			log.Error("read event", "err", err)
+			return 1
+		}
 	}
+	log = log.With("repo", ev.Owner+"/"+ev.Repo, "pr", ev.PR, "trigger", ev.Trigger)
 
 	if err := Run(ctx, Runner{
 		Event:   ev,
-		Host:    gh,
+		Host:    h,
 		Cluster: cl,
 		Log:     log,
 	}); err != nil {
