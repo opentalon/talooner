@@ -38,6 +38,7 @@ func TestRedactorPatterns(t *testing.T) {
 		{"token ghs_0123456789abcdefghijkl leaked", true},
 		{"token ghp_0123456789abcdefghijkl leaked", true},
 		{"token github_pat_0123456789abcdefghijkl leaked", true},
+		{"token glpat-0123456789abcdefghijkl leaked", true},
 		{"Authorization: Bearer 0123456789abcdefghijkl", true},
 		// A commit sha is 40 hex characters and is logged on purpose.
 		{"head sha 5f2e1c4a9b7d3e6f0a1b2c3d4e5f60718293a4b5", false},

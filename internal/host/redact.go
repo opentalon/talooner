@@ -12,6 +12,7 @@ const Placeholder = "[REDACTED]"
 var tokenPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{16,}`),
 	regexp.MustCompile(`github_pat_[A-Za-z0-9_]{16,}`),
+	regexp.MustCompile(`glpat-[A-Za-z0-9_-]{16,}`),
 	regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9._\-]{16,}`),
 }
 
