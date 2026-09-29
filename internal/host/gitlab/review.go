@@ -69,6 +69,10 @@ type discussionNote struct {
 	System     bool   `json:"system"`
 	Resolvable bool   `json:"resolvable"`
 	Resolved   bool   `json:"resolved"`
+	Author     *struct {
+		Username string `json:"username"`
+		Bot      bool   `json:"bot"`
+	} `json:"author"`
 }
 
 type discussionPayload struct {
