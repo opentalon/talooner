@@ -21,8 +21,20 @@ RUN CGO_ENABLED=0 go build \
       -o /out/talooner-action ./cmd/talooner-action
 
 # Static, no shell, non-root. The action only makes HTTPS calls; it needs CA
-# certificates and nothing else.
-FROM gcr.io/distroless/static-debian12:nonroot
+# certificates and nothing else. Used by GitHub Actions, which execs the
+# image's ENTRYPOINT directly — no shell required.
+FROM gcr.io/distroless/static-debian12:nonroot AS github
+
+COPY --from=build /out/talooner-action /talooner-action
+
+ENTRYPOINT ["/talooner-action"]
+
+# GitLab CI's Docker executor runs every job's `script:` through a shell
+# inside the container, regardless of the image's own ENTRYPOINT — the
+# `github` target above has no shell and can't run there. `debug-nonroot`
+# is the same distroless base with busybox (sh + coreutils) added, still
+# non-root, still nothing beyond CA certs otherwise.
+FROM gcr.io/distroless/static-debian12:debug-nonroot AS gitlab
 
 COPY --from=build /out/talooner-action /talooner-action
 

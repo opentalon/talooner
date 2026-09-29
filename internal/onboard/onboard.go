@@ -11,6 +11,9 @@ import (
 //go:embed templates/talooner.yml
 var Workflow []byte
 
+//go:embed templates/talooner-gitlab-ci.yml
+var GitLabCI []byte
+
 //go:embed templates/rules.tln
 var Ruleset []byte
 
@@ -19,6 +22,7 @@ var RulesetTest []byte
 
 const (
 	WorkflowPath    = ".github/workflows/talooner.yml"
+	GitLabCIPath    = ".gitlab-ci.yml"
 	RulesetPath     = ".talooner/rules.tln"
 	RulesetTestPath = ".talooner/rules.tln.test"
 )

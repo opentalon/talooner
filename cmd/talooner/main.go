@@ -14,6 +14,7 @@ import (
 
 	"github.com/opentalon/talooner/internal/cluster"
 	"github.com/opentalon/talooner/internal/credentials"
+	"github.com/opentalon/talooner/internal/host/gitlab"
 	"github.com/opentalon/talooner/internal/onboard"
 	"github.com/opentalon/talooner/internal/version"
 )
@@ -23,8 +24,8 @@ const usage = `talooner is the operator CLI for a self-hosted Talooner deploymen
 Usage:
   talooner cluster login --url <host> --key <api-key>
   talooner cluster whoami
-  talooner init --repo <owner/name> [--org <org>]
-  talooner onboard --repo <owner/name> [--base <branch>] [--branch <branch>] [--force] [--no-pr]
+  talooner init --repo <owner/name> [--host github|gitlab] [--org <org-or-group>]
+  talooner onboard --repo <owner/name> [--host github|gitlab] [--base <branch>] [--branch <branch>] [--force] [--no-pr]
   talooner rules validate <path-to-.talooner>
   talooner rules test <path-to-.talooner>
   talooner rules plan --repo <owner/name> --pr <number>
@@ -152,12 +153,17 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer, gh on
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	repo := fs.String("repo", "", "repo to onboard, as owner/name")
-	org := fs.String("org", "", "set secrets at the org level instead of the repo level")
+	host := fs.String("host", "github", "git host: github or gitlab")
+	org := fs.String("org", "", "set variables at the org (GitHub) or group (GitLab) level instead of the repo/project level")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if strings.Count(*repo, "/") != 1 || strings.HasPrefix(*repo, "/") || strings.HasSuffix(*repo, "/") {
 		printf(stderr, "talooner init: --repo must be owner/name, got %q\n", *repo)
+		return 2
+	}
+	if *host != "github" && *host != "gitlab" {
+		printf(stderr, "talooner init: --host must be github or gitlab, got %q\n", *host)
 		return 2
 	}
 
@@ -174,6 +180,10 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer, gh on
 	if err != nil {
 		printf(stderr, "talooner init: %v\n", err)
 		return 1
+	}
+
+	if *host == "gitlab" {
+		return runInitGitLab(ctx, *repo, *org, creds, stdout, stderr)
 	}
 
 	if err := onboard.CheckGH(ctx, gh); err != nil {
@@ -201,6 +211,51 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer, gh on
 
 	printf(stdout, "secrets set on %s — run `talooner onboard --repo %s` to scaffold a ruleset and open a PR\n", *repo, *repo)
 	return 0
+}
+
+func runInitGitLab(ctx context.Context, repo, group string, creds credentials.Credentials, stdout, stderr io.Writer) int {
+	owner, name, _ := strings.Cut(repo, "/")
+
+	gl, err := gitlab.NewFromEnv()
+	if err != nil {
+		printf(stderr, "talooner init: %v — set GITLAB_TOKEN to a PAT or project access token with api scope\n", err)
+		return 1
+	}
+
+	variables := []struct {
+		name   string
+		value  string
+		masked bool
+	}{
+		{"OPENTALON_HOST", creds.Host, false},
+		{"OPENTALON_API_KEY", creds.APIKey, true},
+	}
+	for _, v := range variables {
+		var err error
+		if group != "" {
+			err = gl.UpsertGroupVariable(ctx, group, v.name, v.value, v.masked)
+		} else {
+			err = gl.UpsertProjectVariable(ctx, owner, name, v.name, v.value, v.masked)
+		}
+		if err != nil {
+			printf(stderr, "talooner init: %v\n", err)
+			return 1
+		}
+		printf(stdout, "set variable %s\n", v.name)
+	}
+
+	printf(stdout, "variables set on %s — GitLab has no auto-provisioned write token, so also set GITLAB_TOKEN yourself "+
+		"as a masked %s CI/CD variable (a PAT or project access token with api scope) before the pipeline can call back to GitLab\n",
+		repo, levelLabel(group))
+	printf(stdout, "then run `talooner onboard --repo %s --host gitlab` to scaffold a ruleset and open an MR\n", repo)
+	return 0
+}
+
+func levelLabel(group string) string {
+	if group != "" {
+		return "group-level"
+	}
+	return "project-level"
 }
 
 func printf(w io.Writer, format string, args ...any) {
