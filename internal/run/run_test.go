@@ -1015,6 +1015,32 @@ func TestRulesetFallsBackToLegacyPathWithWarning(t *testing.T) {
 	}
 }
 
+// A fork PR reads the ruleset twice in one run — once for the base branch's
+// governing ruleset, once for the head branch's plan preview — so a repo
+// entirely on the legacy path must log the deprecation warning once, not
+// twice.
+func TestLegacyRulesetWarningIsDedupedWithinARun(t *testing.T) {
+	f := &fakeCluster{
+		answers:    evaluated(),
+		planAnswer: &taloonerpb.EvaluatePrResponse{},
+	}
+	gh := &fakeGitHub{fork: true}
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+
+	if err := Run(t.Context(), Runner{
+		Event: commentEvent("!talooner /review"), Host: gh.client(t), Cluster: dialFake(t, f), Log: log,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !gh.hit("/contents/.github/talooner/rules.tln") {
+		t.Error("the legacy ruleset path was never requested")
+	}
+	if got := strings.Count(buf.String(), "legacy_path=.github/talooner/rules.tln"); got != 1 {
+		t.Errorf("legacy ruleset warning logged %d times, want exactly 1:\n%s", got, buf.String())
+	}
+}
+
 // CODEOWNERS gets the same .talooner/ preference and legacy fallback as the
 // ruleset and config files, layered on top of its own multi-path search.
 func TestCodeownersFoundAtNewPathSkipsLegacyFallback(t *testing.T) {

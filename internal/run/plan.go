@@ -15,6 +15,9 @@ func (r Runner) Plan(ctx context.Context, owner, repo string, prNum int, w io.Wr
 	if r.Log == nil {
 		r.Log = slog.New(slog.DiscardHandler)
 	}
+	if r.warnedLegacy == nil {
+		r.warnedLegacy = make(map[string]bool)
+	}
 	fullRepo := owner + "/" + repo
 
 	pr, err := r.Host.PullRequest(ctx, owner, repo, prNum)

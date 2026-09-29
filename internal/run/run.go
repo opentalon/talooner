@@ -52,6 +52,13 @@ type Runner struct {
 	Cluster *cluster.Client
 	Handle  string
 	Log     *slog.Logger
+
+	// warnedLegacy dedups the legacy-path deprecation warning so a repo that
+	// still lives entirely under .github/talooner/ logs it once per run rather
+	// than once per config file. Maps are reference types, so every value copy
+	// of Runner taken within a single Run/Plan call shares the same map. Nil
+	// (the zero value) disables dedup rather than panicking on insert.
+	warnedLegacy map[string]bool
 }
 
 func Run(ctx context.Context, r Runner) error {
@@ -60,6 +67,9 @@ func Run(ctx context.Context, r Runner) error {
 	}
 	if r.Log == nil {
 		r.Log = slog.New(slog.DiscardHandler)
+	}
+	if r.warnedLegacy == nil {
+		r.warnedLegacy = make(map[string]bool)
 	}
 	if r.Handle == "" {
 		r.Handle = command.DefaultHandle
@@ -280,9 +290,22 @@ func (r Runner) loadFile(ctx context.Context, owner, repo, path, legacyPath, ref
 	if err != nil {
 		return nil, err
 	}
+	r.warnLegacyPath(owner, repo, path, legacyPath)
+	return data, nil
+}
+
+// warnLegacyPath logs the legacy-path deprecation warning at most once per
+// legacyPath per Runner (see warnedLegacy) — a repo entirely on the legacy
+// layout would otherwise log it once per config file per run.
+func (r Runner) warnLegacyPath(owner, repo, path, legacyPath string) {
+	if r.warnedLegacy != nil {
+		if r.warnedLegacy[legacyPath] {
+			return
+		}
+		r.warnedLegacy[legacyPath] = true
+	}
 	r.Log.Warn("using legacy talooner config path, move it", "legacy_path", legacyPath, "path", path,
 		"repo", owner+"/"+repo)
-	return data, nil
 }
 
 func (r Runner) loadConfig(ctx context.Context, owner, repo, ref string) (config.Config, error) {
@@ -313,8 +336,7 @@ func (r Runner) loadCodeowners(ctx context.Context, owner, repo, ref string) ([]
 	for _, p := range legacyCodeownersPaths {
 		data, err := r.Host.FileContent(ctx, owner, repo, p, ref)
 		if err == nil {
-			r.Log.Warn("using legacy CODEOWNERS path, move it to .talooner/CODEOWNERS",
-				"legacy_path", p, "repo", owner+"/"+repo)
+			r.warnLegacyPath(owner, repo, CodeownersPath, p)
 			return data, nil
 		}
 		if !errors.Is(err, host.ErrNotFound) {

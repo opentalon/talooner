@@ -13,6 +13,14 @@ var ErrNotFound = errors.New("not found")
 
 const DiffMaxBytes = 1 << 20
 
+// These string values are the canonical, host-neutral vocabulary for review
+// disposition, review/check state, and check-run conclusion/annotation
+// level — not GitHub-specific. They happen to equal GitHub's own wire values
+// today, since GitHub is the only backend so far and reusing its literals
+// meant no translation layer was needed yet. A GitLab (or other) backend
+// maps its own state model onto these rather than reusing GitHub's strings
+// verbatim, e.g. GitLab has no REQUEST_CHANGES review state and would map
+// its "unresolved discussion thread" approximation to ReviewRequestChanges.
 const (
 	ReviewApprove        = "APPROVE"
 	ReviewRequestChanges = "REQUEST_CHANGES"
@@ -127,6 +135,11 @@ type Checks struct {
 	Statuses []CommitStatus
 }
 
+// Pending reports whether any run or status is still outstanding. "queued",
+// "in_progress" and "pending" are the neutral status vocabulary a backend's
+// CheckRunReport/CommitStatus values are expected to use — GitHub's own
+// values today, mapped rather than reused verbatim by any future backend
+// whose native states differ.
 func (c Checks) Pending() bool {
 	for _, r := range c.Runs {
 		if r.Status == "queued" || r.Status == "in_progress" {
