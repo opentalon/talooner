@@ -73,6 +73,10 @@ func (c *Client) Note(ctx context.Context, owner, repo string, number int, id in
 	if _, err := c.do(ctx, request{method: http.MethodGet, path: path}, &n); err != nil {
 		return "", "", fmt.Errorf("read note %d on %s/%s!%d: %w", id, owner, repo, number, err)
 	}
+	if n.System {
+		return "", "", fmt.Errorf("read note %d on %s/%s!%d: %w: a system note is not a user comment",
+			id, owner, repo, number, host.ErrNotFound)
+	}
 	var author string
 	if n.Author != nil {
 		author = n.Author.Username

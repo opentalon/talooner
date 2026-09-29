@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/opentalon/talooner/internal/event"
+	"github.com/opentalon/talooner/internal/host"
 )
 
 const (
@@ -76,6 +77,9 @@ func parseTrigger(ctx context.Context, nf NoteFetcher) (*event.Event, error) {
 	}
 
 	body, author, err := nf.Note(ctx, owner, repo, iid, noteID)
+	if errors.Is(err, host.ErrNotFound) {
+		return nil, fmt.Errorf("%w: note %d on %s/%s!%d is not a user comment", event.ErrUnhandled, noteID, owner, repo, iid)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("fetch note %d on %s/%s!%d: %w", noteID, owner, repo, iid, err)
 	}

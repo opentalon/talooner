@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/opentalon/talooner/internal/event"
+	"github.com/opentalon/talooner/internal/host"
 	gitlabhost "github.com/opentalon/talooner/internal/host/gitlab"
 )
 
@@ -220,6 +221,23 @@ func TestFromEnvTriggerFetchError(t *testing.T) {
 	_, err := FromEnv(context.Background(), &fakeNoteFetcher{err: wantErr})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("FromEnv err = %v, want wrapping %v", err, wantErr)
+	}
+}
+
+func TestFromEnvTriggerSystemNoteIsSkippable(t *testing.T) {
+	withEnv(t, map[string]string{
+		"CI_PIPELINE_SOURCE": "trigger",
+		"CI_PROJECT_PATH":    "opentalon/talooner",
+		"TALOONER_MR_IID":    "7",
+		"TALOONER_NOTE_ID":   "987",
+	})
+
+	_, err := FromEnv(context.Background(), &fakeNoteFetcher{err: host.ErrNotFound})
+	if !errors.Is(err, event.ErrUnhandled) {
+		t.Fatalf("FromEnv err = %v, want wrapping event.ErrUnhandled", err)
+	}
+	if !event.Skip(err) {
+		t.Fatalf("event.Skip(%v) = false, want true", err)
 	}
 }
 

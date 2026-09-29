@@ -37,7 +37,7 @@ func TestGitLabNoteReadsBodyAndAuthor(t *testing.T) {
 
 func TestGitLabNoteMissingAuthorIsEmptyString(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = fmt.Fprint(w, `{"id":987,"body":"a system note","author":null}`)
+		_, _ = fmt.Fprint(w, `{"id":987,"body":"/talooner plan","author":null}`)
 	}))
 	defer srv.Close()
 
@@ -48,6 +48,18 @@ func TestGitLabNoteMissingAuthorIsEmptyString(t *testing.T) {
 	}
 	if author != "" {
 		t.Errorf("author = %q, want empty", author)
+	}
+}
+
+func TestGitLabNoteSystemNoteIsErrNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"id":987,"body":"changed the description","system":true,"author":{"username":"zhisme"}}`)
+	}))
+	defer srv.Close()
+
+	c, _ := newTestClient(t, srv)
+	if _, _, err := c.Note(context.Background(), "opentalon", "talooner", 7, 987); !errors.Is(err, host.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound: a system note is not a user comment", err)
 	}
 }
 
