@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/opentalon/talooner/internal/host"
 )
@@ -285,5 +286,73 @@ func TestTruncateLongCommentKeepsValidUTF8AndNotice(t *testing.T) {
 	}
 	if !strings.Contains(text, "truncated") {
 		t.Error("truncated text missing truncation notice")
+	}
+}
+
+func TestCreateCommentAlwaysPosts(t *testing.T) {
+	s := &commentServer{notes: []note{{ID: 1, Body: testCommentMarker + "\nold"}}}
+	c := s.client(t)
+	id, err := c.CreateComment(context.Background(), "o", "r", 42, "the answer")
+	if err != nil {
+		t.Fatalf("CreateComment: %v", err)
+	}
+	if id == 0 {
+		t.Error("CreateComment returned id 0")
+	}
+	if len(s.posted) != 1 || s.posted[0] != "the answer" {
+		t.Errorf("posted = %v, want exactly one note carrying the body verbatim", s.posted)
+	}
+}
+
+func TestCreateCommentNeverDeduplicates(t *testing.T) {
+	s := &commentServer{}
+	c := s.client(t)
+	if _, err := c.CreateComment(context.Background(), "o", "r", 42, "first answer"); err != nil {
+		t.Fatalf("CreateComment: %v", err)
+	}
+	if _, err := c.CreateComment(context.Background(), "o", "r", 42, "second answer"); err != nil {
+		t.Fatalf("CreateComment: %v", err)
+	}
+	if len(s.posted) != 2 {
+		t.Fatalf("posted = %d, want 2: a later ask must not overwrite an earlier answer", len(s.posted))
+	}
+}
+
+func TestCreateCommentTruncatesAnOversizedBody(t *testing.T) {
+	s := &commentServer{}
+	long := strings.Repeat("é", maxCommentBytes)
+	if _, err := s.client(t).CreateComment(context.Background(), "o", "r", 42, long); err != nil {
+		t.Fatalf("CreateComment: %v", err)
+	}
+	got := s.posted[0]
+	if len(got) > maxCommentBytes {
+		t.Errorf("posted %d bytes, over the %d cap", len(got), maxCommentBytes)
+	}
+	if !utf8.ValidString(got) {
+		t.Error("truncation cut a rune in half")
+	}
+}
+
+func TestCreateCommentRejectsAnEmptyBody(t *testing.T) {
+	s := &commentServer{}
+	if _, err := s.client(t).CreateComment(context.Background(), "o", "r", 42, "  \n"); err == nil {
+		t.Fatal("CreateComment succeeded with a blank body")
+	}
+	if len(s.posted) != 0 {
+		t.Error("a blank body reached the API")
+	}
+}
+
+func TestCreateCommentNeedsAMergeRequestNumber(t *testing.T) {
+	s := &commentServer{}
+	if _, err := s.client(t).CreateComment(context.Background(), "o", "r", 0, "x"); err == nil {
+		t.Fatal("CreateComment succeeded on MR 0")
+	}
+}
+
+func TestCreateCommentFailsOnAWriteError(t *testing.T) {
+	s := &commentServer{postStatus: http.StatusForbidden}
+	if _, err := s.client(t).CreateComment(context.Background(), "o", "r", 42, "x"); err == nil {
+		t.Fatal("CreateComment succeeded despite the write failing")
 	}
 }

@@ -113,6 +113,32 @@ func (c *Client) editNote(ctx context.Context, owner, repo string, number int, i
 	return id, nil
 }
 
+func (c *Client) CreateComment(ctx context.Context, owner, repo string, number int, body string) (int64, error) {
+	if number <= 0 {
+		return 0, fmt.Errorf("merge request iid must be positive, got %d", number)
+	}
+	if strings.TrimSpace(body) == "" {
+		return 0, errors.New("comment needs a body")
+	}
+
+	raw, err := json.Marshal(note{Body: truncate(body)})
+	if err != nil {
+		return 0, fmt.Errorf("encode comment on %s/%s!%d: %w", owner, repo, number, err)
+	}
+	path, err := projectPath(owner, repo, "merge_requests", strconv.Itoa(number), "notes")
+	if err != nil {
+		return 0, err
+	}
+	var written note
+	if _, err := c.do(ctx, request{method: http.MethodPost, path: path, body: raw}, &written); err != nil {
+		return 0, fmt.Errorf("post comment on %s/%s!%d: %w", owner, repo, number, err)
+	}
+	if written.ID == 0 {
+		return 0, fmt.Errorf("post comment on %s/%s!%d: response carried no id", owner, repo, number)
+	}
+	return written.ID, nil
+}
+
 func (c *Client) CommentBody(ctx context.Context, owner, repo string, number int, marker string) (string, error) {
 	if number <= 0 {
 		return "", fmt.Errorf("merge request iid must be positive, got %d", number)
