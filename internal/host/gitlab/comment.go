@@ -53,6 +53,35 @@ type note struct {
 	ID     int64  `json:"id"`
 	Body   string `json:"body"`
 	System bool   `json:"system"`
+	Author *struct {
+		Username string `json:"username"`
+	} `json:"author"`
+}
+
+func (c *Client) Note(ctx context.Context, owner, repo string, number int, id int64) (string, string, error) {
+	if number <= 0 {
+		return "", "", fmt.Errorf("merge request iid must be positive, got %d", number)
+	}
+	if id <= 0 {
+		return "", "", fmt.Errorf("note id must be positive, got %d", id)
+	}
+	path, err := projectPath(owner, repo, "merge_requests", strconv.Itoa(number), "notes", strconv.FormatInt(id, 10))
+	if err != nil {
+		return "", "", err
+	}
+	var n note
+	if _, err := c.do(ctx, request{method: http.MethodGet, path: path}, &n); err != nil {
+		return "", "", fmt.Errorf("read note %d on %s/%s!%d: %w", id, owner, repo, number, err)
+	}
+	if n.System {
+		return "", "", fmt.Errorf("read note %d on %s/%s!%d: %w: a system note is not a user comment",
+			id, owner, repo, number, host.ErrNotFound)
+	}
+	var author string
+	if n.Author != nil {
+		author = n.Author.Username
+	}
+	return n.Body, author, nil
 }
 
 func (c *Client) UpsertComment(ctx context.Context, owner, repo string, number int, s host.StickyComment) (int64, error) {
