@@ -343,6 +343,9 @@ func (r Runner) loadCodeowners(ctx context.Context, owner, repo, ref string) ([]
 			return nil, fmt.Errorf("load %s from %s/%s@%s: %w", p, owner, repo, ref, err)
 		}
 	}
+	// No CODEOWNERS anywhere is a valid state, not an error: nil, nil rather
+	// than host.ErrNotFound, unlike loadModules/loadTeams/etc., which return
+	// their zero value on ErrNotFound but still surface other errors the same way.
 	return nil, nil
 }
 

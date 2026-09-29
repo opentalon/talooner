@@ -43,6 +43,12 @@ const (
 	LevelFailure = "failure"
 )
 
+const (
+	StatusQueued     = "queued"
+	StatusInProgress = "in_progress"
+	StatusPending    = "pending"
+)
+
 type PullRequest struct {
 	Number       int
 	HeadSHA      string
@@ -142,12 +148,12 @@ type Checks struct {
 // whose native states differ.
 func (c Checks) Pending() bool {
 	for _, r := range c.Runs {
-		if r.Status == "queued" || r.Status == "in_progress" {
+		if r.Status == StatusQueued || r.Status == StatusInProgress {
 			return true
 		}
 	}
 	for _, s := range c.Statuses {
-		if s.State == "pending" {
+		if s.State == StatusPending {
 			return true
 		}
 	}
