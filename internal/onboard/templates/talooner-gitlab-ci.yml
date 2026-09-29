@@ -1,0 +1,9 @@
+talooner:
+  image: ghcr.io/opentalon/talooner:v1-gitlab
+  variables:
+    GIT_STRATEGY: none
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "trigger"'
+  script:
+    - /talooner-action

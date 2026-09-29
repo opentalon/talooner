@@ -53,14 +53,38 @@ jobs:
             echo 'TAGS_EOF'
           } >> "$GITHUB_OUTPUT"
 
+          {
+            echo 'gitlab-tags<<GITLAB_TAGS_EOF'
+            echo "ghcr.io/opentalon/talooner:${{ github.ref_name }}-gitlab"
+            if [[ "$prerelease" == "false" ]]; then
+              echo "ghcr.io/opentalon/talooner:v1-gitlab"
+            fi
+            echo 'GITLAB_TAGS_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         id: push
         uses: docker/build-push-action@v6
         with:
           context: .
+          target: github
           push: true
           build-args: VERSION=${{ github.ref_name }}
           tags: ${{ steps.channel.outputs.tags }}
+
+      # Same binary, GitLab-only tag — see the Dockerfile's `gitlab` target
+      # comment for why this needs its own image (busybox shell for GitLab
+      # CI's Docker executor). Not digest-pinned anywhere: the onboarding
+      # template tracks the floating v1-gitlab tag, same as v1 does for the
+      # GitHub Action before it gets pinned below.
+      - name: Build and push GitLab image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: gitlab
+          push: true
+          build-args: VERSION=${{ github.ref_name }}
+          tags: ${{ steps.channel.outputs.gitlab-tags }}
 
       # A released tag must resolve to one immutable image, so the tag's own
       # commit gets action.yml rewritten to the digest that was just pushed.

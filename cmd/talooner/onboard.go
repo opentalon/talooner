@@ -13,6 +13,7 @@ import (
 
 	"github.com/opentalon/talooner/internal/cluster"
 	"github.com/opentalon/talooner/internal/credentials"
+	"github.com/opentalon/talooner/internal/host/gitlab"
 	"github.com/opentalon/talooner/internal/onboard"
 )
 
@@ -22,7 +23,8 @@ func runOnboard(ctx context.Context, args []string, stdout, stderr io.Writer, gh
 	fs := flag.NewFlagSet("onboard", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	repo := fs.String("repo", "", "repo to onboard, as owner/name")
-	base := fs.String("base", "", "base branch the PR targets, and the branch onboard's new branch is cut from; auto-detected (local master, then main) when omitted")
+	host := fs.String("host", "github", "git host: github or gitlab")
+	base := fs.String("base", "", "base branch the PR/MR targets, and the branch onboard's new branch is cut from; auto-detected (local master, then main) when omitted")
 	branch := fs.String("branch", defaultOnboardBranch, "branch to create for the ruleset")
 	force := fs.Bool("force", false, "overwrite an existing rules.tln/rules.tln.test that differs")
 	noPR := fs.Bool("no-pr", false, "write and verify the ruleset locally but skip branch/commit/push/PR")
@@ -31,6 +33,10 @@ func runOnboard(ctx context.Context, args []string, stdout, stderr io.Writer, gh
 	}
 	if strings.Count(*repo, "/") != 1 || strings.HasPrefix(*repo, "/") || strings.HasSuffix(*repo, "/") {
 		printf(stderr, "talooner onboard: --repo must be owner/name, got %q\n", *repo)
+		return 2
+	}
+	if *host != "github" && *host != "gitlab" {
+		printf(stderr, "talooner onboard: --host must be github or gitlab, got %q\n", *host)
 		return 2
 	}
 
@@ -77,11 +83,16 @@ func runOnboard(ctx context.Context, args []string, stdout, stderr io.Writer, gh
 		printf(stdout, "generated a ruleset from the repo summary\n")
 	}
 
+	entrypointPath, entrypointContent := onboard.WorkflowPath, onboard.Workflow
+	if *host == "gitlab" {
+		entrypointPath, entrypointContent = onboard.GitLabCIPath, onboard.GitLabCI
+	}
+
 	files := []struct {
 		path    string
 		content []byte
 	}{
-		{onboard.WorkflowPath, onboard.Workflow},
+		{entrypointPath, entrypointContent},
 		{onboard.RulesetPath, []byte(rulesetSrc)},
 		{onboard.RulesetTestPath, []byte(testSrc)},
 	}
@@ -122,8 +133,12 @@ func runOnboard(ctx context.Context, args []string, stdout, stderr io.Writer, gh
 	}
 
 	if localBranchExists(ctx, git, *branch) {
-		printf(stderr, "talooner onboard: branch %q already exists locally — a previous onboarding run may still have an open PR; check `gh pr list --repo %s --head %s`, then close/merge it or delete the local branch (`git branch -D %s`) before retrying\n",
-			*branch, *repo, *branch, *branch)
+		checkCmd := fmt.Sprintf("gh pr list --repo %s --head %s", *repo, *branch)
+		if *host == "gitlab" {
+			checkCmd = fmt.Sprintf("check %s's open merge requests for a %s source branch", *repo, *branch)
+		}
+		printf(stderr, "talooner onboard: branch %q already exists locally — a previous onboarding run may still have an open PR/MR; %s, then close/merge it or delete the local branch (`git branch -D %s`) before retrying\n",
+			*branch, checkCmd, *branch)
 		return 1
 	}
 
@@ -132,9 +147,13 @@ func runOnboard(ctx context.Context, args []string, stdout, stderr io.Writer, gh
 		return 1
 	}
 	commitMsg := "Add Talooner workflow and ruleset (talooner onboarding)"
-	if err := onboard.CommitAndPush(ctx, git, *branch, commitMsg, []string{onboard.WorkflowPath, onboard.RulesetPath, onboard.RulesetTestPath}); err != nil {
+	if err := onboard.CommitAndPush(ctx, git, *branch, commitMsg, []string{entrypointPath, onboard.RulesetPath, onboard.RulesetTestPath}); err != nil {
 		printf(stderr, "talooner onboard: %v\n", err)
 		return 1
+	}
+
+	if *host == "gitlab" {
+		return finishOnboardGitLab(ctx, *repo, *branch, resolvedBase, genResp, summary, stdout, stderr)
 	}
 
 	if err := onboard.CheckGH(ctx, gh); err != nil {
@@ -150,6 +169,25 @@ func runOnboard(ctx context.Context, args []string, stdout, stderr io.Writer, gh
 		return 1
 	}
 	printf(stdout, "%s", out)
+	return 0
+}
+
+func finishOnboardGitLab(ctx context.Context, repo, branch, base string, genResp *taloonerpb.GenerateRulesetResponse, summary string, stdout, stderr io.Writer) int {
+	owner, name, _ := strings.Cut(repo, "/")
+
+	gl, err := gitlab.NewFromEnv()
+	if err != nil {
+		printf(stderr, "talooner onboard: %v — set GITLAB_TOKEN to a PAT or project access token with api scope\n", err)
+		return 1
+	}
+
+	body := onboardPRBody(genResp, summary)
+	url, err := gl.CreateMergeRequest(ctx, owner, name, branch, base, "talooner onboarding", body)
+	if err != nil {
+		printf(stderr, "talooner onboard: opening merge request: %v\n", err)
+		return 1
+	}
+	printf(stdout, "opened %s\n", url)
 	return 0
 }
 
