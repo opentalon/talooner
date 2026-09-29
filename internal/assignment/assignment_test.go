@@ -9,7 +9,7 @@ import (
 	"github.com/opentalon/talooner/internal/action"
 	"github.com/opentalon/talooner/internal/comment"
 	"github.com/opentalon/talooner/internal/config"
-	"github.com/opentalon/talooner/internal/github"
+	"github.com/opentalon/talooner/internal/host"
 )
 
 // fakeGitHub is the pull request as GitHub holds it, plus a record of every
@@ -28,7 +28,7 @@ type fakeGitHub struct {
 	addAssigneesErr, removeAssigneesErr, requestErr, unrequestErr, ledgerReadErr, ledgerWriteErr error
 
 	calls   []string
-	written []github.StickyComment
+	written []host.StickyComment
 }
 
 func (f *fakeGitHub) CommentBody(_ context.Context, _, _ string, _ int, marker string) (string, error) {
@@ -42,7 +42,7 @@ func (f *fakeGitHub) CommentBody(_ context.Context, _, _ string, _ int, marker s
 	return f.ledger, nil
 }
 
-func (f *fakeGitHub) UpsertComment(_ context.Context, _, _ string, _ int, s github.StickyComment) (int64, error) {
+func (f *fakeGitHub) UpsertComment(_ context.Context, _, _ string, _ int, s host.StickyComment) (int64, error) {
 	f.calls = append(f.calls, "write ledger")
 	if f.ledgerWriteErr != nil {
 		return 0, f.ledgerWriteErr
@@ -77,33 +77,33 @@ func (f *fakeGitHub) RemoveAssignees(_ context.Context, _, _ string, _ int, logi
 	return clone(f.assignees), nil
 }
 
-func (f *fakeGitHub) RequestReviewers(_ context.Context, _, _ string, _ int, users, teams []string) (github.Reviewers, error) {
+func (f *fakeGitHub) RequestReviewers(_ context.Context, _, _ string, _ int, users, teams []string) (host.Reviewers, error) {
 	f.calls = append(f.calls, "request "+strings.Join(append(clone(users), teams...), ","))
 	if f.requestErr != nil {
-		return github.Reviewers{}, f.requestErr
+		return host.Reviewers{}, f.requestErr
 	}
 	f.users = union(f.users, users)
 	f.teams = union(f.teams, teams)
 	return f.standing(), nil
 }
 
-func (f *fakeGitHub) RemoveReviewRequests(_ context.Context, _, _ string, _ int, users, teams []string) (github.Reviewers, error) {
+func (f *fakeGitHub) RemoveReviewRequests(_ context.Context, _, _ string, _ int, users, teams []string) (host.Reviewers, error) {
 	f.calls = append(f.calls, "unrequest "+strings.Join(append(clone(users), teams...), ","))
 	if f.unrequestErr != nil {
-		return github.Reviewers{}, f.unrequestErr
+		return host.Reviewers{}, f.unrequestErr
 	}
 	f.users = missing(f.users, users)
 	f.teams = missing(f.teams, teams)
 	return f.standing(), nil
 }
 
-func (f *fakeGitHub) standing() github.Reviewers {
-	return github.Reviewers{Users: clone(f.users), Teams: clone(f.teams)}
+func (f *fakeGitHub) standing() host.Reviewers {
+	return host.Reviewers{Users: clone(f.users), Teams: clone(f.teams)}
 }
 
 // pr is the pull request as the run fetched it, i.e. before this run's writes.
-func (f *fakeGitHub) pr(author string) *github.PullRequest {
-	return &github.PullRequest{
+func (f *fakeGitHub) pr(author string) *host.PullRequest {
+	return &host.PullRequest{
 		Number: 42, Author: author,
 		Assignees: clone(f.assignees),
 		Requested: f.standing(),

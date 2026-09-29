@@ -7,11 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-)
 
-const (
-	ReviewApprove        = "APPROVE"
-	ReviewRequestChanges = "REQUEST_CHANGES"
+	"github.com/opentalon/talooner/internal/host"
 )
 
 var ErrReviewPermission = errors.New(
@@ -19,25 +16,12 @@ var ErrReviewPermission = errors.New(
 		`Enable "Allow GitHub Actions to create and approve pull requests" for this repo or org ` +
 		"(Settings → Actions → General), see auth.md, \"Error codes\"")
 
-const (
-	StateApproved         = "APPROVED"
-	StateChangesRequested = "CHANGES_REQUESTED"
-)
-
 var stateOf = map[string]string{
-	ReviewApprove:        StateApproved,
-	ReviewRequestChanges: StateChangesRequested,
+	host.ReviewApprove:        host.StateApproved,
+	host.ReviewRequestChanges: host.StateChangesRequested,
 }
 
-type Review struct {
-	Marker         string
-	Event          string
-	Body           string
-	CommitID       string
-	DismissMessage string
-}
-
-func (rv Review) validate() error {
+func validateReview(rv host.Review) error {
 	if strings.TrimSpace(rv.Marker) == "" {
 		return errors.New("review needs a marker")
 	}
@@ -65,7 +49,7 @@ func (rv Review) validate() error {
 	return nil
 }
 
-func (rv Review) text() string { return rv.Marker + "\n" + rv.Body }
+func reviewText(rv host.Review) string { return rv.Marker + "\n" + rv.Body }
 
 type reviewPayload struct {
 	ID       int64       `json:"id"`
@@ -80,15 +64,7 @@ type reviewUser struct {
 	Type  string `json:"type"`
 }
 
-type ReviewReport struct {
-	ID       int64
-	Login    string
-	Bot      bool
-	State    string
-	CommitID string
-}
-
-func (c *Client) PullRequestReviews(ctx context.Context, owner, repo string, number int) ([]ReviewReport, error) {
+func (c *Client) PullRequestReviews(ctx context.Context, owner, repo string, number int) ([]host.ReviewReport, error) {
 	if number <= 0 {
 		return nil, fmt.Errorf("pull request number must be positive, got %d", number)
 	}
@@ -101,12 +77,12 @@ func (c *Client) PullRequestReviews(ctx context.Context, owner, repo string, num
 		return nil, fmt.Errorf("list reviews on %s/%s#%d: %w", owner, repo, number, err)
 	}
 
-	out := make([]ReviewReport, 0, len(all))
+	out := make([]host.ReviewReport, 0, len(all))
 	for _, r := range all {
 		if r.ID == 0 {
 			continue
 		}
-		rr := ReviewReport{ID: r.ID, State: r.State, CommitID: r.CommitID}
+		rr := host.ReviewReport{ID: r.ID, State: r.State, CommitID: r.CommitID}
 		if r.User != nil {
 			rr.Login = r.User.Login
 			rr.Bot = r.User.Type == "Bot"
@@ -116,11 +92,11 @@ func (c *Client) PullRequestReviews(ctx context.Context, owner, repo string, num
 	return out, nil
 }
 
-func (c *Client) SyncReview(ctx context.Context, owner, repo string, number int, rv Review) (int64, error) {
+func (c *Client) SyncReview(ctx context.Context, owner, repo string, number int, rv host.Review) (int64, error) {
 	if number <= 0 {
 		return 0, fmt.Errorf("pull request number must be positive, got %d", number)
 	}
-	if err := rv.validate(); err != nil {
+	if err := validateReview(rv); err != nil {
 		return 0, err
 	}
 
@@ -156,7 +132,7 @@ func (c *Client) SyncReview(ctx context.Context, owner, repo string, number int,
 		CommitID string `json:"commit_id"`
 		Body     string `json:"body"`
 		Event    string `json:"event"`
-	}{CommitID: rv.CommitID, Body: rv.text(), Event: rv.Event})
+	}{CommitID: rv.CommitID, Body: reviewText(rv), Event: rv.Event})
 	if err != nil {
 		return 0, fmt.Errorf("encode review for %s/%s#%d: %w", owner, repo, number, err)
 	}
@@ -191,7 +167,7 @@ func (c *Client) dismissReview(ctx context.Context, owner, repo string, number i
 		return fmt.Errorf("encode dismissal of review %d on %s/%s#%d: %w", id, owner, repo, number, err)
 	}
 	if _, err := c.do(ctx, request{method: http.MethodPut, path: path, body: raw}, nil); err != nil {
-		if errors.Is(err, ErrNotFound) {
+		if errors.Is(err, host.ErrNotFound) {
 			c.log.Info("review disappeared before it could be dismissed",
 				"repo", owner+"/"+repo, "pr", number, "review", id)
 			return nil
@@ -216,7 +192,7 @@ func (c *Client) findReviews(ctx context.Context, owner, repo string, number int
 		if r.ID == 0 || !strings.Contains(r.Body, marker) {
 			continue
 		}
-		if r.State != StateApproved && r.State != StateChangesRequested {
+		if r.State != host.StateApproved && r.State != host.StateChangesRequested {
 			continue
 		}
 		mine = append(mine, r)

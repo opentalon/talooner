@@ -33,7 +33,7 @@ which is most of the point. A review policy that lives in a web dashboard is a
 policy nobody can review.
 
 Read from the **base** branch when governing writes (`architecture.md`, "Fork
-safety"). Absent `.github/talooner/` → the bot replies to `!talooner /review`
+safety"). Absent `.talooner/` → the bot replies to `!talooner /review`
 with a one-comment "no ruleset found" and does nothing else.
 
 ## Namespaces
@@ -122,7 +122,7 @@ Neither is knowable generically. Both are derived from check runs and statuses
 on the head sha, matched against tenant-declared name patterns:
 
 ```yaml
-# .github/talooner/config.yaml
+# .talooner/config.yaml
 checks:
   tests: ["test", "ci/*", "*unit*"]
   lint:  ["lint", "golangci-lint", "rubocop"]
@@ -285,8 +285,10 @@ answers. Tier 1: the last matching CODEOWNERS rule wins per GitHub,
 `user.owner` is the first owner of the first touched path CODEOWNERS assigns.
 CODEOWNERS is read from the **base** branch at its own ref, like the ruleset and
 config (architecture.md, "Fork safety") — a fork PR cannot name its own owners.
-The three locations GitHub consults (`.github/CODEOWNERS`, `CODEOWNERS`,
-`docs/CODEOWNERS`) are tried in priority order.
+`.talooner/CODEOWNERS` is tried first; if absent, the three locations GitHub
+itself consults (`.github/CODEOWNERS`, `CODEOWNERS`, `docs/CODEOWNERS`) are
+tried in priority order as a legacy fallback, logging a deprecation warning
+when one of them is what resolves it.
 
 Tier 2 queries GitHub's commits API, one path at a time — the endpoint takes a
 single `path` filter, so there is no one-call equivalent of `git log -- path1
@@ -312,7 +314,7 @@ rather than guessed at `pr.author`. Safe under "Unset is false" — a rule gated
 the same quiet non-match as a repo with neither signal.
 
 ```yaml
-# .github/talooner/modules.yaml
+# .talooner/modules.yaml
 - path: internal/auth/
   documentation_url: https://docs.example.com/auth
   owner: "@alice"
@@ -412,7 +414,7 @@ so a fork PR cannot redefine what it touches. `modules.yaml` carries both
 `documentation_url` and `owner` per path prefix:
 
 ```yaml
-# .github/talooner/modules.yaml
+# .talooner/modules.yaml
 - path: internal/auth/
   documentation_url: https://docs.example.com/auth
   owner: "@alice"
@@ -422,7 +424,7 @@ so a fork PR cannot redefine what it touches. `modules.yaml` carries both
 ```
 
 ```yaml
-# .github/talooner/teams.yaml
+# .talooner/teams.yaml
 senior_oncall: "@org/senior-engineers"
 designers:     "@org/design"
 security_team: "@org/security"
@@ -606,7 +608,7 @@ nothing to flag gets. The wire field is sent on every unit regardless;
 `talooner-plugin` has no matching field yet ([`talooner-plugin#63`](https://github.com/opentalon/talooner-plugin/issues/63)),
 so it is decoded and dropped until that lands.
 
-**Gated on the repo having its own `.github/talooner/architecture.yaml`** —
+**Gated on the repo having its own `.talooner/architecture.yaml`** —
 not on any rule actually using `llm_review`. The built-in per-language layer
 table alone matches almost every changed file in almost every repo (Go's
 `internal/<pkg>/`, Rails' `app/models/` and friends), so resolving docs
@@ -670,7 +672,7 @@ it has one, then look under `docs/<kind>s/`. `app/services/orders_service.rb`
 ### `architecture.yaml`: override or extend the built-in layers
 
 ```yaml
-# .github/talooner/architecture.yaml
+# .talooner/architecture.yaml
 - path: app/services/orders_service.rb
   kind: service
   doc_ref: docs/services/orders.md

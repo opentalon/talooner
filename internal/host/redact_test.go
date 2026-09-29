@@ -1,16 +1,15 @@
-package github
+package host
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+const testToken = "ghs_0123456789abcdefghijklmnopqrstuvwxyz"
 
 func TestRedactorLiterals(t *testing.T) {
 	r := NewRedactor("s3cr3t-cluster-key-value")
@@ -93,47 +92,5 @@ func TestRedactHandlerScrubsMessagesAndAttrs(t *testing.T) {
 	}
 	if !strings.Contains(out, "status=500") {
 		t.Errorf("log = %q, want the int attribute intact", out)
-	}
-}
-
-// The retry path logs the failing request. That log must not carry the token,
-// and this is the case a new call site is most likely to get wrong.
-func TestClientRetryLogHasNoToken(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusBadGateway)
-		_, _ = fmt.Fprintf(w, `{"message":"upstream said %s"}`, testToken)
-	}))
-	defer srv.Close()
-
-	var buf bytes.Buffer
-	c, _ := newTestClient(t, srv,
-		WithMaxRetries(1),
-		WithLogger(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))),
-	)
-
-	_, err := c.PullRequest(context.Background(), "o", "r", 1)
-	if err == nil {
-		t.Fatal("PullRequest: want error, got nil")
-	}
-	if strings.Contains(buf.String(), testToken) {
-		t.Errorf("log = %q, want no token in it", buf.String())
-	}
-	if buf.Len() == 0 {
-		t.Error("log is empty, want the retry recorded")
-	}
-	if strings.Contains(err.Error(), testToken) {
-		t.Errorf("err = %v, want no token in it", err)
-	}
-}
-
-// WithSecrets must not lose the token the client was built with.
-func TestWithSecretsKeepsTheToken(t *testing.T) {
-	c, err := New(testToken, WithSecrets("another-long-secret-value"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	got := c.redactor.String(testToken + " and another-long-secret-value")
-	if strings.Contains(got, testToken) || strings.Contains(got, "another-long-secret-value") {
-		t.Errorf("String = %q, want both secrets gone", got)
 	}
 }

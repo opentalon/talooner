@@ -15,9 +15,12 @@ func (r Runner) Plan(ctx context.Context, owner, repo string, prNum int, w io.Wr
 	if r.Log == nil {
 		r.Log = slog.New(slog.DiscardHandler)
 	}
+	if r.warnedLegacy == nil {
+		r.warnedLegacy = make(map[string]bool)
+	}
 	fullRepo := owner + "/" + repo
 
-	pr, err := r.GitHub.PullRequest(ctx, owner, repo, prNum)
+	pr, err := r.Host.PullRequest(ctx, owner, repo, prNum)
 	if err != nil {
 		return fmt.Errorf("fetch %s#%d: %w", fullRepo, prNum, err)
 	}
@@ -25,7 +28,7 @@ func (r Runner) Plan(ctx context.Context, owner, repo string, prNum int, w io.Wr
 		return fmt.Errorf("%s#%d came back with no base ref", fullRepo, prNum)
 	}
 
-	ruleset, err := r.GitHub.FileContent(ctx, owner, repo, RulesetPath, pr.BaseRef)
+	ruleset, err := r.loadFile(ctx, owner, repo, RulesetPath, legacyRulesetPath, pr.BaseRef)
 	if err != nil {
 		return fmt.Errorf("load ruleset: %w", err)
 	}
@@ -50,7 +53,7 @@ func (r Runner) Plan(ctx context.Context, owner, repo string, prNum int, w io.Wr
 		return err
 	}
 
-	set, units, err := facts.PR(ctx, r.GitHub, owner, repo, prNum, cfg.Checks, codeowners, modules, teams, arch)
+	set, units, err := facts.PR(ctx, r.Host, owner, repo, prNum, cfg.Checks, codeowners, modules, teams, arch)
 	if err != nil {
 		return err
 	}

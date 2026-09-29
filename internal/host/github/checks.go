@@ -7,48 +7,20 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+
+	"github.com/opentalon/talooner/internal/host"
 )
 
-type CheckRunReport struct {
-	Name       string
-	Status     string
-	Conclusion string
-}
-
-type CommitStatus struct {
-	Context string
-	State   string
-}
-
-type Checks struct {
-	Runs     []CheckRunReport
-	Statuses []CommitStatus
-}
-
-func (c Checks) Pending() bool {
-	for _, r := range c.Runs {
-		if r.Status == "queued" || r.Status == "in_progress" {
-			return true
-		}
-	}
-	for _, s := range c.Statuses {
-		if s.State == "pending" {
-			return true
-		}
-	}
-	return false
-}
-
-func (c *Client) CommitChecks(ctx context.Context, owner, repo, sha string) (Checks, error) {
+func (c *Client) CommitChecks(ctx context.Context, owner, repo, sha string) (host.Checks, error) {
 	if sha == "" {
-		return Checks{}, fmt.Errorf("head sha is required to fetch checks")
+		return host.Checks{}, fmt.Errorf("head sha is required to fetch checks")
 	}
 	path, err := repoPath(owner, repo, "commits", sha, "check-runs")
 	if err != nil {
-		return Checks{}, err
+		return host.Checks{}, err
 	}
 
-	var checks Checks
+	var checks host.Checks
 	if err := c.collectObject(ctx, path, nil, func(raw json.RawMessage) error {
 		var page struct {
 			CheckRuns []struct {
@@ -61,7 +33,7 @@ func (c *Client) CommitChecks(ctx context.Context, owner, repo, sha string) (Che
 			return fmt.Errorf("decode check runs at %s: %w", path, err)
 		}
 		for _, r := range page.CheckRuns {
-			checks.Runs = append(checks.Runs, CheckRunReport{
+			checks.Runs = append(checks.Runs, host.CheckRunReport{
 				Name:       r.Name,
 				Status:     r.Status,
 				Conclusion: r.Conclusion,
@@ -69,12 +41,12 @@ func (c *Client) CommitChecks(ctx context.Context, owner, repo, sha string) (Che
 		}
 		return nil
 	}); err != nil {
-		return Checks{}, err
+		return host.Checks{}, err
 	}
 
 	path, err = repoPath(owner, repo, "commits", sha, "status")
 	if err != nil {
-		return Checks{}, err
+		return host.Checks{}, err
 	}
 	if err := c.collectObject(ctx, path, nil, func(raw json.RawMessage) error {
 		var page struct {
@@ -87,14 +59,14 @@ func (c *Client) CommitChecks(ctx context.Context, owner, repo, sha string) (Che
 			return fmt.Errorf("decode commit statuses at %s: %w", path, err)
 		}
 		for _, s := range page.Statuses {
-			checks.Statuses = append(checks.Statuses, CommitStatus{
+			checks.Statuses = append(checks.Statuses, host.CommitStatus{
 				Context: s.Context,
 				State:   s.State,
 			})
 		}
 		return nil
 	}); err != nil {
-		return Checks{}, err
+		return host.Checks{}, err
 	}
 	return checks, nil
 }

@@ -226,7 +226,7 @@ sequenceDiagram
         Bot-->>Dev: exit 0, no writes — prevents budget burn<br/>by drive-by accounts
     else has write access
         Bot->>GH: fetch PR, files, checks, CODEOWNERS
-        Bot->>GH: fetch .github/talooner/ from BASE branch
+        Bot->>GH: fetch .talooner/ from BASE branch
         Note over Bot,GH: base branch, never head —<br/>see diagram 6
 
         Bot->>Plug: action evaluate_pr — facts, ruleset, head_sha
@@ -354,7 +354,7 @@ edits the ruleset gets a read-only plan run instead.
 
 ```mermaid
 flowchart TB
-    START["PR opened, maintainer runs<br/>!talooner /review"] --> FORK{"Does this PR modify<br/>.github/talooner/ ?"}
+    START["PR opened, maintainer runs<br/>!talooner /review"] --> FORK{"Does this PR modify<br/>.talooner/ ?"}
 
     FORK -->|"no"| NORM["Load ruleset from BASE branch"]
     NORM --> EVAL["Evaluate"]
@@ -497,7 +497,7 @@ flowchart LR
 ```
 
 Everything yellow is **committed to the repo being reviewed**, under
-`.github/talooner/`. The review policy is versioned, diffable, and unit-testable
+`.talooner/`. The review policy is versioned, diffable, and unit-testable
 with `.tln.test` — which is the claim no LLM-based reviewer can make.
 
 Custom fact names are namespaced away from `pr.*` and `review.*`. Without that, a

@@ -7,21 +7,12 @@ import (
 	"strings"
 
 	"github.com/opentalon/talooner/internal/config"
-	"github.com/opentalon/talooner/internal/github"
+	"github.com/opentalon/talooner/internal/host"
 )
 
-type Source interface {
-	ResolveMergeable(ctx context.Context, owner, repo string, number int) (*github.PullRequest, error)
-	ChangedFileStats(ctx context.Context, owner, repo string, number int) ([]github.FileStat, error)
-	CommitChecks(ctx context.Context, owner, repo, headSHA string) (github.Checks, error)
-	Diff(ctx context.Context, owner, repo string, number, maxBytes int) (string, bool, error)
-	PullRequestReviews(ctx context.Context, owner, repo string, number int) ([]github.ReviewReport, error)
-	LastToucher(ctx context.Context, owner, repo, baseSHA string, paths []string) (string, error)
-}
-
-func PR(ctx context.Context, src Source, owner, repo string, number int, checks config.Checks, codeowners []byte, modules []config.Module, teams config.Teams, arch []config.ArchitectureRule) (Set, []CodeUnit, error) {
+func PR(ctx context.Context, src host.Source, owner, repo string, number int, checks config.Checks, codeowners []byte, modules []config.Module, teams config.Teams, arch []config.ArchitectureRule) (Set, []CodeUnit, error) {
 	type prResult struct {
-		pr  *github.PullRequest
+		pr  *host.PullRequest
 		err error
 	}
 	prCh := make(chan prResult, 1)
@@ -55,7 +46,7 @@ func PR(ctx context.Context, src Source, owner, repo string, number int, checks 
 		return nil, nil, fmt.Errorf("extract pr.checks_pending for %s/%s#%d: %w", owner, repo, number, err)
 	}
 
-	diff, truncated, err := src.Diff(ctx, owner, repo, number, github.DiffMaxBytes)
+	diff, truncated, err := src.Diff(ctx, owner, repo, number, host.DiffMaxBytes)
 	if err != nil {
 		return nil, nil, fmt.Errorf("extract pr.diff for %s/%s#%d: %w", owner, repo, number, err)
 	}
@@ -111,7 +102,7 @@ func PR(ctx context.Context, src Source, owner, repo string, number int, checks 
 	return s, units, nil
 }
 
-func userFacts(ctx context.Context, src Source, s Set, owner, repo string, pr *github.PullRequest, changed []string, codeowners []byte) error {
+func userFacts(ctx context.Context, src host.Source, s Set, owner, repo string, pr *host.PullRequest, changed []string, codeowners []byte) error {
 	s.String("user.author", pr.Author)
 
 	if r := pr.Requested.Users; len(r) > 0 {
@@ -140,7 +131,7 @@ func userFacts(ctx context.Context, src Source, s Set, owner, repo string, pr *g
 	return nil
 }
 
-func derivePassing(runs []github.CheckRunReport, statuses []github.CommitStatus, patterns []string) *bool {
+func derivePassing(runs []host.CheckRunReport, statuses []host.CommitStatus, patterns []string) *bool {
 	if len(patterns) == 0 {
 		return nil
 	}

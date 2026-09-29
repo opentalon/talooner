@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/opentalon/talooner/internal/config"
-	"github.com/opentalon/talooner/internal/github"
+	"github.com/opentalon/talooner/internal/host"
 )
 
 // architectureFacts asserts every code.* roll-up, always — a PR touching
@@ -16,13 +16,13 @@ import (
 func TestPRArchitectureFacts(t *testing.T) {
 	for _, tt := range []struct {
 		name  string
-		files []github.FileStat
+		files []host.FileStat
 		arch  []config.ArchitectureRule
 		want  map[string]any
 	}{
 		{
 			name:  "nothing under a known layer",
-			files: []github.FileStat{{Path: "README.md"}},
+			files: []host.FileStat{{Path: "README.md"}},
 			want: map[string]any{
 				"code.models_changed":      []string{},
 				"code.controllers_changed": []string{},
@@ -34,7 +34,7 @@ func TestPRArchitectureFacts(t *testing.T) {
 		},
 		{
 			name: "Rails model, controller and service are file-granularity units",
-			files: []github.FileStat{
+			files: []host.FileStat{
 				{Path: "app/models/user.rb"},
 				{Path: "app/controllers/orders_controller.rb"},
 				{Path: "app/services/orders_service.rb"},
@@ -50,7 +50,7 @@ func TestPRArchitectureFacts(t *testing.T) {
 		},
 		{
 			name: "Go internal/ and cmd/ fold into one unit per top-level package dir",
-			files: []github.FileStat{
+			files: []host.FileStat{
 				{Path: "internal/auth/token.go"},
 				{Path: "internal/auth/session.go"},
 				{Path: "cmd/tln/main.go"},
@@ -66,7 +66,7 @@ func TestPRArchitectureFacts(t *testing.T) {
 		},
 		{
 			name: "a file directly under internal/ with no package dir forms no unit",
-			files: []github.FileStat{
+			files: []host.FileStat{
 				{Path: "internal/doc.go"},
 			},
 			want: map[string]any{
@@ -78,7 +78,7 @@ func TestPRArchitectureFacts(t *testing.T) {
 		},
 		{
 			name:  "architecture.yaml extends the built-ins with a new prefix",
-			files: []github.FileStat{{Path: "legacy/order.rb"}},
+			files: []host.FileStat{{Path: "legacy/order.rb"}},
 			arch:  []config.ArchitectureRule{{Path: "legacy/", Kind: "model"}},
 			want: map[string]any{
 				"code.models_changed": []string{"legacy"},
@@ -87,7 +87,7 @@ func TestPRArchitectureFacts(t *testing.T) {
 		},
 		{
 			name: "architecture.yaml overrides the built-in kind for a narrower prefix",
-			files: []github.FileStat{
+			files: []host.FileStat{
 				{Path: "app/services/orders_service.rb"},
 			},
 			arch: []config.ArchitectureRule{
@@ -117,7 +117,7 @@ func TestPRArchitectureFacts(t *testing.T) {
 // naming the doc — "orders_service.rb" documents "orders.md", per
 // expert-review-system.md's own example.
 func TestPRArchitectureUnitsCarryConventionalDocRefs(t *testing.T) {
-	files := []github.FileStat{
+	files := []host.FileStat{
 		{Path: "app/models/user.rb"},
 		{Path: "app/controllers/orders_controller.rb"},
 		{Path: "app/services/orders_service.rb"},
@@ -148,7 +148,7 @@ func TestPRArchitectureUnitsCarryConventionalDocRefs(t *testing.T) {
 // an override without a stated doc is not defaulted to the built-in
 // convention, it simply has no doc to review against.
 func TestPRArchitectureOverrideWithNoDocRefStaysUnset(t *testing.T) {
-	files := []github.FileStat{{Path: "legacy/order.rb"}}
+	files := []host.FileStat{{Path: "legacy/order.rb"}}
 	arch := []config.ArchitectureRule{{Path: "legacy/", Kind: "model"}}
 	s := New()
 	units := architectureFacts(s, files, "", arch)
@@ -165,7 +165,7 @@ func TestPRArchitectureDiffSlicePerUnit(t *testing.T) {
 		"--- a/app/models/user.rb\n+++ b/app/models/user.rb\n@@ -1 +1 @@\n+user change\n" +
 		"diff --git a/app/models/order.rb b/app/models/order.rb\n" +
 		"--- a/app/models/order.rb\n+++ b/app/models/order.rb\n@@ -1 +1 @@\n+order change\n"
-	files := []github.FileStat{{Path: "app/models/user.rb"}, {Path: "app/models/order.rb"}}
+	files := []host.FileStat{{Path: "app/models/user.rb"}, {Path: "app/models/order.rb"}}
 	s := New()
 	units := architectureFacts(s, files, diff, nil)
 
@@ -191,7 +191,7 @@ func TestPRArchitectureTestDiffSlicePerUnit(t *testing.T) {
 		"--- a/internal/auth/token_test.go\n+++ b/internal/auth/token_test.go\n" +
 		"@@ -1,1 +1,1 @@\n-fixture := v1\n+fixture := v2\n" +
 		"@@ -5,1 +5,1 @@\n-require.Equal(t, 5, ttl)\n+require.Equal(t, 500, ttl)\n"
-	files := []github.FileStat{
+	files := []host.FileStat{
 		{Path: "internal/auth/token.go"},
 		{Path: "internal/auth/token_test.go"},
 	}
@@ -220,7 +220,7 @@ func TestPRArchitectureTestDiffSlicePerUnit(t *testing.T) {
 // TestDiffSlice, not a dead extractor left unset (facts.md, "Unset is
 // false"): CodeUnit is a plain struct, so "empty" is the honest zero here.
 func TestPRArchitectureTestDiffSliceEmptyWithNoTestFile(t *testing.T) {
-	files := []github.FileStat{{Path: "app/models/user.rb"}}
+	files := []host.FileStat{{Path: "app/models/user.rb"}}
 	s := New()
 	units := architectureFacts(s, files, "diff --git a/app/models/user.rb b/app/models/user.rb\n--- a/app/models/user.rb\n+++ a/app/models/user.rb\n@@ -1 +1 @@\n+x\n", nil)
 	if len(units) != 1 || units[0].TestDiffSlice != "" {

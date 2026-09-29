@@ -9,8 +9,6 @@ import (
 	"strings"
 )
 
-const DiffMaxBytes = 1 << 20
-
 type filePatch struct {
 	Filename string `json:"filename"`
 	Patch    string `json:"patch"`

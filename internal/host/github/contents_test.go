@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/opentalon/talooner/internal/host"
 )
 
 func TestFileContentReadsTheRefItWasGiven(t *testing.T) {
@@ -49,7 +51,7 @@ func TestFileContentMissingFileIsErrNotFound(t *testing.T) {
 
 	c, _ := newTestClient(t, srv)
 	_, err := c.FileContent(context.Background(), "opentalon", "talooner", "a.tln", "master")
-	if !errors.Is(err, ErrNotFound) {
+	if !errors.Is(err, host.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound: a repo with no ruleset is an answer, not a failure", err)
 	}
 }

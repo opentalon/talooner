@@ -36,7 +36,7 @@ func TestPlanRendersActionsAndWritesNothing(t *testing.T) {
 	gh := &fakeGitHub{}
 
 	var out bytes.Buffer
-	r := Runner{GitHub: gh.client(t), Cluster: dialFake(t, f)}
+	r := Runner{Host: gh.client(t), Cluster: dialFake(t, f)}
 	if err := r.Plan(context.Background(), "opentalon", "talooner", 42, &out); err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestPlanWithNoActionsRendersNothingAndSucceeds(t *testing.T) {
 	gh := &fakeGitHub{}
 
 	var out bytes.Buffer
-	r := Runner{GitHub: gh.client(t), Cluster: dialFake(t, f)}
+	r := Runner{Host: gh.client(t), Cluster: dialFake(t, f)}
 	if err := r.Plan(context.Background(), "opentalon", "talooner", 42, &out); err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestPlanWithBrokenRulesetFails(t *testing.T) {
 	gh := &fakeGitHub{}
 
 	var out bytes.Buffer
-	r := Runner{GitHub: gh.client(t), Cluster: dialFake(t, f)}
+	r := Runner{Host: gh.client(t), Cluster: dialFake(t, f)}
 	if err := r.Plan(context.Background(), "opentalon", "talooner", 42, &out); err == nil {
 		t.Fatal("Plan = nil, want the plugin's refusal")
 	}

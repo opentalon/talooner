@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/opentalon/talooner/internal/host"
 )
 
 // filesServer returns the given JSON file entries for the /files endpoint and,
@@ -33,7 +35,7 @@ func TestDiffConcatenatesPatches(t *testing.T) {
 	defer srv.Close()
 
 	c, _ := newTestClient(t, srv)
-	diff, trunc, err := c.Diff(context.Background(), "o", "r", 1, DiffMaxBytes)
+	diff, trunc, err := c.Diff(context.Background(), "o", "r", 1, host.DiffMaxBytes)
 	if err != nil {
 		t.Fatalf("Diff: %v", err)
 	}
@@ -53,7 +55,7 @@ func TestDiffSkipsBinaryFiles(t *testing.T) {
 	defer srv.Close()
 
 	c, _ := newTestClient(t, srv)
-	diff, _, err := c.Diff(context.Background(), "o", "r", 1, DiffMaxBytes)
+	diff, _, err := c.Diff(context.Background(), "o", "r", 1, host.DiffMaxBytes)
 	if err != nil {
 		t.Fatalf("Diff: %v", err)
 	}
@@ -179,7 +181,7 @@ func TestDiffFailsOnServerError(t *testing.T) {
 	defer srv.Close()
 
 	c, _ := newTestClient(t, srv, WithMaxRetries(1))
-	if _, _, err := c.Diff(context.Background(), "o", "r", 1, DiffMaxBytes); err == nil {
+	if _, _, err := c.Diff(context.Background(), "o", "r", 1, host.DiffMaxBytes); err == nil {
 		t.Fatal("Diff: want error, got nil")
 	}
 }
@@ -193,8 +195,8 @@ func TestDiffRejectsBadArguments(t *testing.T) {
 		number   int
 		maxBytes int
 	}{
-		{0, DiffMaxBytes},
-		{-1, DiffMaxBytes},
+		{0, host.DiffMaxBytes},
+		{-1, host.DiffMaxBytes},
 		{1, 0},
 		{1, -5},
 	} {

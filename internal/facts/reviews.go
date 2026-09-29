@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/opentalon/talooner/internal/config"
-	"github.com/opentalon/talooner/internal/github"
+	"github.com/opentalon/talooner/internal/host"
 )
 
 var teamNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$`)
@@ -18,14 +18,14 @@ type reviewDecision struct {
 	commitID string
 }
 
-func currentDecisions(reviews []github.ReviewReport) map[string]reviewDecision {
-	latest := make(map[string]github.ReviewReport)
+func currentDecisions(reviews []host.ReviewReport) map[string]reviewDecision {
+	latest := make(map[string]host.ReviewReport)
 	for _, r := range reviews {
 		if r.Login == "" {
 			continue
 		}
 		switch r.State {
-		case github.StateApproved, github.StateChangesRequested, "DISMISSED":
+		case host.StateApproved, host.StateChangesRequested, "DISMISSED":
 		default:
 			continue
 		}
@@ -41,14 +41,14 @@ func currentDecisions(reviews []github.ReviewReport) map[string]reviewDecision {
 		}
 		out[login] = reviewDecision{
 			bot:      r.Bot,
-			approved: r.State == github.StateApproved,
+			approved: r.State == host.StateApproved,
 			commitID: r.CommitID,
 		}
 	}
 	return out
 }
 
-func reviewFacts(s Set, headSHA string, reviews []github.ReviewReport, changed []string, codeowners []byte, teams config.Teams, requestedTeams []string, owner string) {
+func reviewFacts(s Set, headSHA string, reviews []host.ReviewReport, changed []string, codeowners []byte, teams config.Teams, requestedTeams []string, owner string) {
 	decisions := currentDecisions(reviews)
 
 	humanApproved, changesRequested := false, false

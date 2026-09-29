@@ -6,10 +6,10 @@ import (
 	"testing"
 
 	"github.com/opentalon/talooner/internal/config"
-	"github.com/opentalon/talooner/internal/github"
+	"github.com/opentalon/talooner/internal/host"
 )
 
-func reviewPR() *github.PullRequest {
+func reviewPR() *host.PullRequest {
 	pr := samplePR()
 	pr.HeadSHA = "head2"
 	return pr
@@ -21,21 +21,21 @@ func reviewPR() *github.PullRequest {
 func TestReviewHumanApproved(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
-		reviews []github.ReviewReport
+		reviews []host.ReviewReport
 		want    bool
 	}{
 		{"no reviews", nil, false},
-		{"human approves at head", []github.ReviewReport{
-			{ID: 1, Login: "alice", State: github.StateApproved, CommitID: "head2"},
+		{"human approves at head", []host.ReviewReport{
+			{ID: 1, Login: "alice", State: host.StateApproved, CommitID: "head2"},
 		}, true},
-		{"bot approval does not count", []github.ReviewReport{
-			{ID: 1, Login: "dependabot", Bot: true, State: github.StateApproved, CommitID: "head2"},
+		{"bot approval does not count", []host.ReviewReport{
+			{ID: 1, Login: "dependabot", Bot: true, State: host.StateApproved, CommitID: "head2"},
 		}, false},
-		{"approval at a stale sha does not count", []github.ReviewReport{
-			{ID: 1, Login: "alice", State: github.StateApproved, CommitID: "head1"},
+		{"approval at a stale sha does not count", []host.ReviewReport{
+			{ID: 1, Login: "alice", State: host.StateApproved, CommitID: "head1"},
 		}, false},
-		{"changes requested is not an approval", []github.ReviewReport{
-			{ID: 1, Login: "alice", State: github.StateChangesRequested, CommitID: "head2"},
+		{"changes requested is not an approval", []host.ReviewReport{
+			{ID: 1, Login: "alice", State: host.StateChangesRequested, CommitID: "head2"},
 		}, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -57,21 +57,21 @@ func TestReviewHumanApproved(t *testing.T) {
 func TestReviewChangesRequestedFoldsToLatestDecision(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
-		reviews []github.ReviewReport
+		reviews []host.ReviewReport
 		want    bool
 	}{
-		{"outstanding request", []github.ReviewReport{
-			{ID: 1, Login: "alice", State: github.StateChangesRequested, CommitID: "head1"},
+		{"outstanding request", []host.ReviewReport{
+			{ID: 1, Login: "alice", State: host.StateChangesRequested, CommitID: "head1"},
 		}, true},
-		{"resolved by a later approval from the same reviewer", []github.ReviewReport{
-			{ID: 1, Login: "alice", State: github.StateChangesRequested, CommitID: "head1"},
-			{ID: 2, Login: "alice", State: github.StateApproved, CommitID: "head2"},
+		{"resolved by a later approval from the same reviewer", []host.ReviewReport{
+			{ID: 1, Login: "alice", State: host.StateChangesRequested, CommitID: "head1"},
+			{ID: 2, Login: "alice", State: host.StateApproved, CommitID: "head2"},
 		}, false},
-		{"a later COMMENTED does not resolve it", []github.ReviewReport{
-			{ID: 1, Login: "alice", State: github.StateChangesRequested, CommitID: "head1"},
+		{"a later COMMENTED does not resolve it", []host.ReviewReport{
+			{ID: 1, Login: "alice", State: host.StateChangesRequested, CommitID: "head1"},
 			{ID: 2, Login: "alice", State: "COMMENTED", CommitID: "head2"},
 		}, true},
-		{"dismissed request no longer counts", []github.ReviewReport{
+		{"dismissed request no longer counts", []host.ReviewReport{
 			{ID: 1, Login: "alice", State: "DISMISSED", CommitID: "head1"},
 		}, false},
 	} {
@@ -100,7 +100,7 @@ func TestReviewTeamFacts(t *testing.T) {
 
 	for _, tt := range []struct {
 		name    string
-		reviews []github.ReviewReport
+		reviews []host.ReviewReport
 		want    map[string]any
 	}{
 		{
@@ -114,8 +114,8 @@ func TestReviewTeamFacts(t *testing.T) {
 		},
 		{
 			name: "approved by a codeowners-listed proxy member at head",
-			reviews: []github.ReviewReport{
-				{ID: 1, Login: "alice", State: github.StateApproved, CommitID: "head2"},
+			reviews: []host.ReviewReport{
+				{ID: 1, Login: "alice", State: host.StateApproved, CommitID: "head2"},
 			},
 			want: map[string]any{
 				"review.senior_engineer.approved": true,
@@ -124,8 +124,8 @@ func TestReviewTeamFacts(t *testing.T) {
 		},
 		{
 			name: "approval at a stale sha reports stale, not approved",
-			reviews: []github.ReviewReport{
-				{ID: 1, Login: "bob", State: github.StateApproved, CommitID: "head1"},
+			reviews: []host.ReviewReport{
+				{ID: 1, Login: "bob", State: host.StateApproved, CommitID: "head1"},
 			},
 			want: map[string]any{
 				"review.senior_engineer.approved": false,
@@ -134,8 +134,8 @@ func TestReviewTeamFacts(t *testing.T) {
 		},
 		{
 			name: "an approval from someone codeowners never lists alongside the team does not count",
-			reviews: []github.ReviewReport{
-				{ID: 1, Login: "carol", State: github.StateApproved, CommitID: "head2"},
+			reviews: []host.ReviewReport{
+				{ID: 1, Login: "carol", State: host.StateApproved, CommitID: "head2"},
 			},
 			want: map[string]any{
 				"review.senior_engineer.approved": false,

@@ -22,7 +22,7 @@ import (
 	"github.com/opentalon/opentalon/proto/pluginpb"
 	"github.com/opentalon/talooner-plugin/proto/taloonerpb"
 
-	"github.com/opentalon/talooner/internal/github"
+	"github.com/opentalon/talooner/internal/host"
 	"github.com/opentalon/talooner/internal/version"
 )
 
@@ -72,7 +72,7 @@ type Client struct {
 	apiKey   string
 	identity Identity
 	log      *slog.Logger
-	redactor *github.Redactor
+	redactor *host.Redactor
 	timeout  time.Duration
 	closed   bool
 
@@ -85,7 +85,7 @@ type Option func(*Client)
 func WithLogger(l *slog.Logger) Option { return func(c *Client) { c.log = l } }
 
 func WithSecrets(secrets ...string) Option {
-	return func(c *Client) { c.redactor = github.NewRedactor(append(secrets, c.apiKey)...) }
+	return func(c *Client) { c.redactor = host.NewRedactor(append(secrets, c.apiKey)...) }
 }
 
 func WithTimeout(d time.Duration) Option { return func(c *Client) { c.timeout = d } }
@@ -94,8 +94,8 @@ func WithDialOptions(opts ...grpc.DialOption) Option {
 	return func(c *Client) { c.dialOpts = append(c.dialOpts, opts...) }
 }
 
-func Dial(ctx context.Context, host, apiKey string, opts ...Option) (*Client, error) {
-	if strings.TrimSpace(host) == "" {
+func Dial(ctx context.Context, addr, apiKey string, opts ...Option) (*Client, error) {
+	if strings.TrimSpace(addr) == "" {
 		return nil, ErrMissingHost
 	}
 	if strings.TrimSpace(apiKey) == "" {
@@ -105,16 +105,16 @@ func Dial(ctx context.Context, host, apiKey string, opts ...Option) (*Client, er
 	c := &Client{
 		apiKey:   apiKey,
 		log:      slog.New(slog.DiscardHandler),
-		redactor: github.NewRedactor(apiKey),
+		redactor: host.NewRedactor(apiKey),
 		timeout:  60 * time.Second,
 		callID:   randomCallID,
 	}
 	for _, opt := range opts {
 		opt(c)
 	}
-	c.log = slog.New(github.RedactHandler(c.log.Handler(), c.redactor))
+	c.log = slog.New(host.RedactHandler(c.log.Handler(), c.redactor))
 
-	target, creds, err := resolve(host)
+	target, creds, err := resolve(addr)
 	if err != nil {
 		return nil, err
 	}
@@ -206,8 +206,8 @@ func (c *Client) Execute(ctx context.Context, action string, args map[string]str
 	return nil
 }
 
-func resolve(host string) (string, credentials.TransportCredentials, error) {
-	raw := strings.TrimSpace(host)
+func resolve(addr string) (string, credentials.TransportCredentials, error) {
+	raw := strings.TrimSpace(addr)
 	if !strings.Contains(raw, "://") {
 		return raw, credentials.NewTLS(nil), nil
 	}

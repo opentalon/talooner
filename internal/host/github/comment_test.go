@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/opentalon/talooner/internal/host"
 )
 
 const marker = "<!-- talooner:v1:review -->"
@@ -101,7 +103,7 @@ func body(t *testing.T, r *http.Request) string {
 	return payload.Body
 }
 
-func sticky(b string) StickyComment { return StickyComment{Marker: marker, Body: b} }
+func sticky(b string) host.StickyComment { return host.StickyComment{Marker: marker, Body: b} }
 
 func TestFirstRunPostsTheComment(t *testing.T) {
 	s := &commentServer{}
@@ -202,7 +204,7 @@ func TestTwoMarkersEditTheOldestAndDoNotFanOut(t *testing.T) {
 func TestEditOnlyPostsNothingWhenThereIsNoComment(t *testing.T) {
 	s := &commentServer{existing: []issueComment{{ID: 1, Body: "unrelated"}}}
 	id, err := s.client(t).UpsertComment(t.Context(), "opentalon", "talooner", 42,
-		StickyComment{Marker: marker, Body: "resolved", EditOnly: true})
+		host.StickyComment{Marker: marker, Body: "resolved", EditOnly: true})
 	if err != nil {
 		t.Fatalf("UpsertComment: %v", err)
 	}
@@ -217,7 +219,7 @@ func TestEditOnlyPostsNothingWhenThereIsNoComment(t *testing.T) {
 func TestEditOnlyEditsWhenTheCommentIsThere(t *testing.T) {
 	s := &commentServer{existing: []issueComment{{ID: 7, Body: marker + "\nfindings"}}}
 	id, err := s.client(t).UpsertComment(t.Context(), "opentalon", "talooner", 42,
-		StickyComment{Marker: marker, Body: "resolved", EditOnly: true})
+		host.StickyComment{Marker: marker, Body: "resolved", EditOnly: true})
 	if err != nil {
 		t.Fatalf("UpsertComment: %v", err)
 	}
@@ -234,7 +236,7 @@ func TestEditOnlyDoesNotResurrectADeletedComment(t *testing.T) {
 		gone:     9,
 	}
 	if _, err := s.client(t).UpsertComment(t.Context(), "opentalon", "talooner", 42,
-		StickyComment{Marker: marker, Body: "resolved", EditOnly: true}); !errors.Is(err, ErrNotFound) {
+		host.StickyComment{Marker: marker, Body: "resolved", EditOnly: true}); !errors.Is(err, host.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 	if len(s.posts) != 0 {
@@ -278,14 +280,14 @@ func TestAnOversizedBodyIsTruncatedRatherThanRejected(t *testing.T) {
 func TestCommentValidation(t *testing.T) {
 	tests := []struct {
 		name string
-		s    StickyComment
+		s    host.StickyComment
 	}{
-		{"no marker", StickyComment{Body: "x"}},
-		{"marker spanning lines", StickyComment{Marker: "<!-- a\nb -->", Body: "x"}},
-		{"no body", StickyComment{Marker: marker, Body: "  \n"}},
+		{"no marker", host.StickyComment{Body: "x"}},
+		{"marker spanning lines", host.StickyComment{Marker: "<!-- a\nb -->", Body: "x"}},
+		{"no body", host.StickyComment{Marker: marker, Body: "  \n"}},
 		// A body carrying the marker would make the next run's listing match on
 		// text the renderer put there, and the truncation cap moves.
-		{"marker inside the body", StickyComment{Marker: marker, Body: "look: " + marker}},
+		{"marker inside the body", host.StickyComment{Marker: marker, Body: "look: " + marker}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

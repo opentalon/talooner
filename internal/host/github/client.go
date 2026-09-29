@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/opentalon/talooner/internal/host"
 	"github.com/opentalon/talooner/internal/version"
 )
 
@@ -27,7 +28,6 @@ const (
 )
 
 var (
-	ErrNotFound    = errors.New("not found")
 	ErrRateLimited = errors.New("rate limited")
 	ErrServer      = errors.New("server error")
 )
@@ -55,7 +55,7 @@ type Client struct {
 	token      string
 	http       *http.Client
 	log        *slog.Logger
-	redactor   *Redactor
+	redactor   *host.Redactor
 	maxRetries int
 	maxWait    time.Duration
 
@@ -78,7 +78,7 @@ func WithHTTPClient(h *http.Client) Option { return func(c *Client) { c.http = h
 func WithLogger(l *slog.Logger) Option { return func(c *Client) { c.log = l } }
 
 func WithSecrets(secrets ...string) Option {
-	return func(c *Client) { c.redactor = NewRedactor(append(secrets, c.token)...) }
+	return func(c *Client) { c.redactor = host.NewRedactor(append(secrets, c.token)...) }
 }
 
 func WithMaxRetries(n int) Option { return func(c *Client) { c.maxRetries = max(n, 0) } }
@@ -98,7 +98,7 @@ func New(token string, opts ...Option) (*Client, error) {
 		token:      token,
 		http:       &http.Client{Timeout: 30 * time.Second},
 		log:        slog.New(slog.DiscardHandler),
-		redactor:   NewRedactor(token),
+		redactor:   host.NewRedactor(token),
 		maxRetries: 3,
 		maxWait:    60 * time.Second,
 		sleep:      sleepCtx,
@@ -110,7 +110,7 @@ func New(token string, opts ...Option) (*Client, error) {
 	if c.baseURL == nil {
 		return nil, errors.New("base url is empty")
 	}
-	c.log = slog.New(RedactHandler(c.log.Handler(), c.redactor))
+	c.log = slog.New(host.RedactHandler(c.log.Handler(), c.redactor))
 	return c, nil
 }
 
@@ -219,7 +219,7 @@ func (c *Client) attempt(ctx context.Context, req request, u *url.URL, out any) 
 		return nil, retryable, c.apiError(req.method, u, resp, raw, ErrServer)
 
 	case resp.StatusCode == http.StatusNotFound:
-		return nil, terminal, c.apiError(req.method, u, resp, raw, ErrNotFound)
+		return nil, terminal, c.apiError(req.method, u, resp, raw, host.ErrNotFound)
 
 	default:
 		return nil, terminal, c.apiError(req.method, u, resp, raw, nil)

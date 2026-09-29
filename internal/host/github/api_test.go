@@ -10,10 +10,11 @@ import (
 	"testing"
 
 	"github.com/opentalon/talooner/internal/command"
+	"github.com/opentalon/talooner/internal/host"
 )
 
 // The client is what B2's gate runs against.
-var _ command.PermissionChecker = (*Client)(nil)
+var _ host.PermissionChecker = (*Client)(nil)
 
 func TestPullRequestFields(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

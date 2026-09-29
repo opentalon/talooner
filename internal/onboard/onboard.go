@@ -19,8 +19,8 @@ var RulesetTest []byte
 
 const (
 	WorkflowPath    = ".github/workflows/talooner.yml"
-	RulesetPath     = ".github/talooner/rules.tln"
-	RulesetTestPath = ".github/talooner/rules.tln.test"
+	RulesetPath     = ".talooner/rules.tln"
+	RulesetTestPath = ".talooner/rules.tln.test"
 )
 
 type Outcome int

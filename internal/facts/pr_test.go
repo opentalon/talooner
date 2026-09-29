@@ -8,44 +8,44 @@ import (
 	"testing"
 
 	"github.com/opentalon/talooner/internal/config"
-	"github.com/opentalon/talooner/internal/github"
+	"github.com/opentalon/talooner/internal/host"
 )
 
-// fakeSource stands in for *github.Client. The extractor is a pure function of
+// fakeSource stands in for *host.Client. The extractor is a pure function of
 // the API responses, so there is nothing here worth an httptest server.
 type fakeSource struct {
-	pr         *github.PullRequest
+	pr         *host.PullRequest
 	prErr      error
 	files      []string
-	fileStats  []github.FileStat
+	fileStats  []host.FileStat
 	fileErr    error
-	checks     github.Checks
+	checks     host.Checks
 	checkErr   error
 	diff       string
 	trunc      bool
 	diffErr    error
-	reviews    []github.ReviewReport
+	reviews    []host.ReviewReport
 	reviewErr  error
 	toucher    string
 	toucherErr error
 }
 
-func (f fakeSource) ResolveMergeable(_ context.Context, _, _ string, _ int) (*github.PullRequest, error) {
+func (f fakeSource) ResolveMergeable(_ context.Context, _, _ string, _ int) (*host.PullRequest, error) {
 	return f.pr, f.prErr
 }
 
-func (f fakeSource) ChangedFileStats(_ context.Context, _, _ string, _ int) ([]github.FileStat, error) {
+func (f fakeSource) ChangedFileStats(_ context.Context, _, _ string, _ int) ([]host.FileStat, error) {
 	if f.fileStats != nil {
 		return f.fileStats, f.fileErr
 	}
-	stats := make([]github.FileStat, 0, len(f.files))
+	stats := make([]host.FileStat, 0, len(f.files))
 	for _, p := range f.files {
-		stats = append(stats, github.FileStat{Path: p})
+		stats = append(stats, host.FileStat{Path: p})
 	}
 	return stats, f.fileErr
 }
 
-func (f fakeSource) CommitChecks(_ context.Context, _, _, _ string) (github.Checks, error) {
+func (f fakeSource) CommitChecks(_ context.Context, _, _, _ string) (host.Checks, error) {
 	return f.checks, f.checkErr
 }
 
@@ -53,7 +53,7 @@ func (f fakeSource) Diff(_ context.Context, _, _ string, _, _ int) (string, bool
 	return f.diff, f.trunc, f.diffErr
 }
 
-func (f fakeSource) PullRequestReviews(_ context.Context, _, _ string, _ int) ([]github.ReviewReport, error) {
+func (f fakeSource) PullRequestReviews(_ context.Context, _, _ string, _ int) ([]host.ReviewReport, error) {
 	return f.reviews, f.reviewErr
 }
 
@@ -61,8 +61,8 @@ func (f fakeSource) LastToucher(_ context.Context, _, _, _ string, _ []string) (
 	return f.toucher, f.toucherErr
 }
 
-func samplePR() *github.PullRequest {
-	return &github.PullRequest{
+func samplePR() *host.PullRequest {
+	return &host.PullRequest{
 		Number:       42,
 		HeadSHA:      "abc123",
 		BaseSHA:      "def456",
@@ -333,14 +333,14 @@ func TestPRMergeableOmittedDoesNotReadAsFalse(t *testing.T) {
 func TestPRChecksPending(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
-		checks github.Checks
+		checks host.Checks
 		want   bool
 	}{
-		{"queued check run", github.Checks{Runs: []github.CheckRunReport{{Status: "queued"}}}, true},
-		{"in_progress check run", github.Checks{Runs: []github.CheckRunReport{{Status: "in_progress"}}}, true},
-		{"pending status", github.Checks{Statuses: []github.CommitStatus{{State: "pending"}}}, true},
-		{"everything settled", github.Checks{Runs: []github.CheckRunReport{{Status: "completed", Conclusion: "success"}}, Statuses: []github.CommitStatus{{State: "success"}}}, false},
-		{"no CI at all", github.Checks{}, false},
+		{"queued check run", host.Checks{Runs: []host.CheckRunReport{{Status: "queued"}}}, true},
+		{"in_progress check run", host.Checks{Runs: []host.CheckRunReport{{Status: "in_progress"}}}, true},
+		{"pending status", host.Checks{Statuses: []host.CommitStatus{{State: "pending"}}}, true},
+		{"everything settled", host.Checks{Runs: []host.CheckRunReport{{Status: "completed", Conclusion: "success"}}, Statuses: []host.CommitStatus{{State: "success"}}}, false},
+		{"no CI at all", host.Checks{}, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, _, err := PR(context.Background(), fakeSource{pr: samplePR(), checks: tt.checks}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
@@ -391,73 +391,73 @@ func TestPRDiffAssertedWithTruncationFlag(t *testing.T) {
 func TestDerivePassing(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
-		runs     []github.CheckRunReport
-		statuses []github.CommitStatus
+		runs     []host.CheckRunReport
+		statuses []host.CommitStatus
 		patterns []string
 		want     *bool
 	}{
 		{"no patterns", nil, nil, nil, nil},
 		{"no matching check",
-			[]github.CheckRunReport{{Name: "deploy", Status: "completed", Conclusion: "success"}},
+			[]host.CheckRunReport{{Name: "deploy", Status: "completed", Conclusion: "success"}},
 			nil, []string{"test"}, nil},
 		{"all matched success",
-			[]github.CheckRunReport{{Name: "test", Status: "completed", Conclusion: "success"}},
+			[]host.CheckRunReport{{Name: "test", Status: "completed", Conclusion: "success"}},
 			nil, []string{"test"}, boolPtr(true)},
 		{"matched failure",
-			[]github.CheckRunReport{{Name: "test", Status: "completed", Conclusion: "failure"}},
+			[]host.CheckRunReport{{Name: "test", Status: "completed", Conclusion: "failure"}},
 			nil, []string{"test"}, boolPtr(false)},
 		{"matched timed_out",
-			[]github.CheckRunReport{{Name: "test", Status: "completed", Conclusion: "timed_out"}},
+			[]host.CheckRunReport{{Name: "test", Status: "completed", Conclusion: "timed_out"}},
 			nil, []string{"test"}, boolPtr(false)},
 		{"matched cancelled",
-			[]github.CheckRunReport{{Name: "test", Status: "completed", Conclusion: "cancelled"}},
+			[]host.CheckRunReport{{Name: "test", Status: "completed", Conclusion: "cancelled"}},
 			nil, []string{"test"}, boolPtr(false)},
 		{"matched still queued",
-			[]github.CheckRunReport{{Name: "test", Status: "queued"}},
+			[]host.CheckRunReport{{Name: "test", Status: "queued"}},
 			nil, []string{"test"}, nil},
 		{"matched in_progress",
-			[]github.CheckRunReport{{Name: "test", Status: "in_progress"}},
+			[]host.CheckRunReport{{Name: "test", Status: "in_progress"}},
 			nil, []string{"test"}, nil},
 		{"matched neutral is unknown, unset",
-			[]github.CheckRunReport{{Name: "test", Status: "completed", Conclusion: "neutral"}},
+			[]host.CheckRunReport{{Name: "test", Status: "completed", Conclusion: "neutral"}},
 			nil, []string{"test"}, nil},
 		{"matched skipped is unknown, unset",
-			[]github.CheckRunReport{{Name: "test", Status: "completed", Conclusion: "skipped"}},
+			[]host.CheckRunReport{{Name: "test", Status: "completed", Conclusion: "skipped"}},
 			nil, []string{"test"}, nil},
 		// Precedence: a recognised failure wins over an unknown conclusion, so a
 		// PR with one red test and one neutral test is not passing.
 		{"failure beats unknown",
-			[]github.CheckRunReport{
+			[]host.CheckRunReport{
 				{Name: "test", Status: "completed", Conclusion: "failure"},
 				{Name: "test", Status: "completed", Conclusion: "neutral"},
 			}, nil, []string{"test"}, boolPtr(false)},
 		// Statuses (the older commit-status API) are matched too.
 		{"status success",
-			nil, []github.CommitStatus{{Context: "test", State: "success"}},
+			nil, []host.CommitStatus{{Context: "test", State: "success"}},
 			[]string{"test"}, boolPtr(true)},
 		{"status failure",
-			nil, []github.CommitStatus{{Context: "test", State: "failure"}},
+			nil, []host.CommitStatus{{Context: "test", State: "failure"}},
 			[]string{"test"}, boolPtr(false)},
 		{"status error",
-			nil, []github.CommitStatus{{Context: "test", State: "error"}},
+			nil, []host.CommitStatus{{Context: "test", State: "error"}},
 			[]string{"test"}, boolPtr(false)},
 		{"status pending",
-			nil, []github.CommitStatus{{Context: "test", State: "pending"}},
+			nil, []host.CommitStatus{{Context: "test", State: "pending"}},
 			[]string{"test"}, nil},
 		// A check outside the pattern does not count; a check inside does.
 		{"pattern ci/* matches across a slash",
-			[]github.CheckRunReport{{Name: "ci/build", Status: "completed", Conclusion: "success"}},
+			[]host.CheckRunReport{{Name: "ci/build", Status: "completed", Conclusion: "success"}},
 			nil, []string{"ci/*"}, boolPtr(true)},
 		{"pattern *unit* substring",
-			[]github.CheckRunReport{{Name: "my-unit-tests", Status: "completed", Conclusion: "success"}},
+			[]host.CheckRunReport{{Name: "my-unit-tests", Status: "completed", Conclusion: "success"}},
 			nil, []string{"*unit*"}, boolPtr(true)},
 		{"case insensitive",
-			[]github.CheckRunReport{{Name: "Unit Tests", Status: "completed", Conclusion: "success"}},
+			[]host.CheckRunReport{{Name: "Unit Tests", Status: "completed", Conclusion: "success"}},
 			nil, []string{"UNIT TESTS"}, boolPtr(true)},
 		// Two patterns, one matched failing, one matched passing: the failure
 		// wins.
 		{"mixed patterns, one fails",
-			[]github.CheckRunReport{
+			[]host.CheckRunReport{
 				{Name: "test", Status: "completed", Conclusion: "success"},
 				{Name: "integration", Status: "completed", Conclusion: "failure"},
 			}, nil, []string{"test", "integration"}, boolPtr(false)},
@@ -478,8 +478,8 @@ func TestDerivePassing(t *testing.T) {
 // read the same CI C8 fetched. The unset cases must be absent from the set, not
 // false — that is the whole point of the gate (facts.md, "Unset is false").
 func TestPRDerivesPassingFacts(t *testing.T) {
-	checks := github.Checks{
-		Runs: []github.CheckRunReport{
+	checks := host.Checks{
+		Runs: []host.CheckRunReport{
 			{Name: "test", Status: "completed", Conclusion: "success"},
 			{Name: "lint", Status: "completed", Conclusion: "failure"},
 		},
@@ -563,7 +563,7 @@ func TestPRFailsOnManifestWithNoReadableDiff(t *testing.T) {
 	src := fakeSource{
 		pr:        samplePR(),
 		diff:      "@@ -1 +1 @@\n+hello",
-		fileStats: []github.FileStat{{Path: "go.mod", Additions: 5, Deletions: 2}},
+		fileStats: []host.FileStat{{Path: "go.mod", Additions: 5, Deletions: 2}},
 	}
 	_, _, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 	if err == nil {
@@ -578,7 +578,7 @@ func TestPRManifestInDiffWithNoDepLinesIsZeroNotError(t *testing.T) {
 	src := fakeSource{
 		pr:        samplePR(),
 		diff:      diffGitFile("go.mod", " module example.com/x\n\n go 1.24"),
-		fileStats: []github.FileStat{{Path: "go.mod", Additions: 1, Deletions: 1}},
+		fileStats: []host.FileStat{{Path: "go.mod", Additions: 1, Deletions: 1}},
 	}
 	got, _, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 	if err != nil {
@@ -597,7 +597,7 @@ func TestPRManifestWithNoStatChangeIsNotUnparseable(t *testing.T) {
 	src := fakeSource{
 		pr:        samplePR(),
 		diff:      "@@ -1 +1 @@\n+hello",
-		fileStats: []github.FileStat{{Path: "go.mod", Additions: 0, Deletions: 0}},
+		fileStats: []host.FileStat{{Path: "go.mod", Additions: 0, Deletions: 0}},
 	}
 	got, _, err := PR(context.Background(), src, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
 	if err != nil {
@@ -610,8 +610,8 @@ func TestPRManifestWithNoStatChangeIsNotUnparseable(t *testing.T) {
 }
 
 func TestPRLeavesPassingFactsUnsetWithoutPatterns(t *testing.T) {
-	checks := github.Checks{
-		Runs: []github.CheckRunReport{{Name: "test", Status: "completed", Conclusion: "success"}},
+	checks := host.Checks{
+		Runs: []host.CheckRunReport{{Name: "test", Status: "completed", Conclusion: "success"}},
 	}
 	// No patterns: the gate must not fire, so the fact is omitted rather than
 	// guessed true from unmatched CI.
@@ -748,12 +748,12 @@ func TestPRFailsWhenLastToucherErrors(t *testing.T) {
 func TestPRUserReviewerFromRequested(t *testing.T) {
 	for _, tt := range []struct {
 		name string
-		pr   *github.PullRequest
+		pr   *host.PullRequest
 		want string
 	}{
-		{"user preferred", &github.PullRequest{Requested: github.Reviewers{Users: []string{"alice"}, Teams: []string{"security"}}}, "alice"},
-		{"team when no user", &github.PullRequest{Requested: github.Reviewers{Teams: []string{"security"}}}, "security"},
-		{"none unset", &github.PullRequest{}, ""},
+		{"user preferred", &host.PullRequest{Requested: host.Reviewers{Users: []string{"alice"}, Teams: []string{"security"}}}, "alice"},
+		{"team when no user", &host.PullRequest{Requested: host.Reviewers{Teams: []string{"security"}}}, "security"},
+		{"none unset", &host.PullRequest{}, ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, _, err := PR(context.Background(), fakeSource{pr: tt.pr}, "opentalon", "talooner", 42, config.Checks{}, nil, nil, nil, nil)
@@ -783,28 +783,28 @@ func TestPRModuleFacts(t *testing.T) {
 
 	for _, tt := range []struct {
 		name    string
-		files   []github.FileStat
+		files   []host.FileStat
 		modules []config.Module
 		want    map[string]any
 		unset   []string
 	}{
 		{
 			name:    "no configured module touched",
-			files:   []github.FileStat{{Path: "README.md", Additions: 5, Deletions: 1}},
+			files:   []host.FileStat{{Path: "README.md", Additions: 5, Deletions: 1}},
 			modules: modules,
 			want:    map[string]any{"module.touched_count": 0},
 			unset:   []string{"module.documentation_url", "module.documentation_urls", "module.owner"},
 		},
 		{
 			name:    "no modules configured at all",
-			files:   []github.FileStat{{Path: "internal/auth/x.go", Additions: 9, Deletions: 0}},
+			files:   []host.FileStat{{Path: "internal/auth/x.go", Additions: 9, Deletions: 0}},
 			modules: nil,
 			want:    map[string]any{"module.touched_count": 0},
 			unset:   []string{"module.documentation_url", "module.documentation_urls", "module.owner"},
 		},
 		{
 			name:    "one module touched, full facts",
-			files:   []github.FileStat{{Path: "internal/auth/token.go", Additions: 9, Deletions: 1}},
+			files:   []host.FileStat{{Path: "internal/auth/token.go", Additions: 9, Deletions: 1}},
 			modules: modules,
 			want: map[string]any{
 				"module.touched_count":      1,
@@ -815,7 +815,7 @@ func TestPRModuleFacts(t *testing.T) {
 		},
 		{
 			name: "primary by most changed lines, tie broken by path order",
-			files: []github.FileStat{
+			files: []host.FileStat{
 				{Path: "billing/invoice.go", Additions: 2, Deletions: 0},
 				{Path: "docs/index.md", Additions: 2, Deletions: 0},
 				{Path: "internal/auth/token.go", Additions: 50, Deletions: 3},
@@ -830,7 +830,7 @@ func TestPRModuleFacts(t *testing.T) {
 		},
 		{
 			name: "exact tie on lines falls to path order",
-			files: []github.FileStat{
+			files: []host.FileStat{
 				// billing/ and docs/ both carry 4 lines; billing/ is the
 				// lexicographically smaller path, so it wins the tie.
 				{Path: "billing/x.go", Additions: 4, Deletions: 0},
@@ -846,7 +846,7 @@ func TestPRModuleFacts(t *testing.T) {
 		},
 		{
 			name:    "owner-less module does not force an empty owner fact",
-			files:   []github.FileStat{{Path: "docs/y.md", Additions: 4, Deletions: 0}},
+			files:   []host.FileStat{{Path: "docs/y.md", Additions: 4, Deletions: 0}},
 			modules: modules,
 			want: map[string]any{
 				"module.touched_count":      1,

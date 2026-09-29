@@ -6,10 +6,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/opentalon/talooner/internal/github"
+	"github.com/opentalon/talooner/internal/host"
 )
 
-func countDependencyChanges(diff string, stats []github.FileStat) (newDeps, upgraded int, err error) {
+func countDependencyChanges(diff string, stats []host.FileStat) (newDeps, upgraded int, err error) {
 	present := map[string]bool{}
 	for _, f := range splitDiffFiles(diff) {
 		if !isManifest(f.name) {

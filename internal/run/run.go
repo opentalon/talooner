@@ -17,26 +17,48 @@ import (
 	"github.com/opentalon/talooner/internal/config"
 	"github.com/opentalon/talooner/internal/event"
 	"github.com/opentalon/talooner/internal/facts"
-	"github.com/opentalon/talooner/internal/github"
+	"github.com/opentalon/talooner/internal/host"
+	"github.com/opentalon/talooner/internal/host/github"
 	"github.com/opentalon/talooner/internal/review"
 )
 
-const RulesetPath = ".github/talooner/rules.tln"
+const RulesetPath = ".talooner/rules.tln"
 
-const ConfigPath = ".github/talooner/config.yaml"
+const ConfigPath = ".talooner/config.yaml"
 
-const ModulePath = ".github/talooner/modules.yaml"
+const ModulePath = ".talooner/modules.yaml"
 
-const TeamPath = ".github/talooner/teams.yaml"
+const TeamPath = ".talooner/teams.yaml"
 
-const ArchitecturePath = ".github/talooner/architecture.yaml"
+const ArchitecturePath = ".talooner/architecture.yaml"
+
+const CodeownersPath = ".talooner/CODEOWNERS"
+
+const legacyRulesetPath = ".github/talooner/rules.tln"
+
+const legacyConfigPath = ".github/talooner/config.yaml"
+
+const legacyModulePath = ".github/talooner/modules.yaml"
+
+const legacyTeamPath = ".github/talooner/teams.yaml"
+
+const legacyArchitecturePath = ".github/talooner/architecture.yaml"
+
+var legacyCodeownersPaths = []string{".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"}
 
 type Runner struct {
 	Event   *event.Event
-	GitHub  *github.Client
+	Host    host.Host
 	Cluster *cluster.Client
 	Handle  string
 	Log     *slog.Logger
+
+	// warnedLegacy dedups the legacy-path deprecation warning so a repo that
+	// still lives entirely under .github/talooner/ logs it once per run rather
+	// than once per config file. Maps are reference types, so every value copy
+	// of Runner taken within a single Run/Plan call shares the same map. Nil
+	// (the zero value) disables dedup rather than panicking on insert.
+	warnedLegacy map[string]bool
 }
 
 func Run(ctx context.Context, r Runner) error {
@@ -45,6 +67,9 @@ func Run(ctx context.Context, r Runner) error {
 	}
 	if r.Log == nil {
 		r.Log = slog.New(slog.DiscardHandler)
+	}
+	if r.warnedLegacy == nil {
+		r.warnedLegacy = make(map[string]bool)
 	}
 	if r.Handle == "" {
 		r.Handle = command.DefaultHandle
@@ -66,7 +91,7 @@ func Run(ctx context.Context, r Runner) error {
 				r.Log.Warn("cannot write the acknowledge comment", "repo", repo, "pr", ev.PR, "err", err)
 			}
 		case command.VerbStop:
-			if _, err := r.GitHub.CreateComment(ctx, ev.Owner, ev.Repo, ev.PR, comment.Stopped()); err != nil {
+			if _, err := r.Host.CreateComment(ctx, ev.Owner, ev.Repo, ev.PR, comment.Stopped()); err != nil {
 				return fmt.Errorf("write stopped comment for %s#%d: %w", repo, ev.PR, err)
 			}
 			if _, err := r.Cluster.SetSubscription(ctx, repo, ev.PR, false); err != nil {
@@ -75,13 +100,13 @@ func Run(ctx context.Context, r Runner) error {
 			r.Log.Info("unsubscribed", "repo", repo, "pr", ev.PR, "actor", ev.Actor)
 			return nil
 		case command.VerbWhy:
-			pr, err := r.GitHub.PullRequest(ctx, ev.Owner, ev.Repo, ev.PR)
+			pr, err := r.Host.PullRequest(ctx, ev.Owner, ev.Repo, ev.PR)
 			if err != nil {
 				return fmt.Errorf("fetch %s#%d: %w", repo, ev.PR, err)
 			}
 			return r.why(ctx, repo, pr)
 		case command.VerbPlan:
-			pr, err := r.GitHub.PullRequest(ctx, ev.Owner, ev.Repo, ev.PR)
+			pr, err := r.Host.PullRequest(ctx, ev.Owner, ev.Repo, ev.PR)
 			if err != nil {
 				return fmt.Errorf("fetch %s#%d: %w", repo, ev.PR, err)
 			}
@@ -109,7 +134,7 @@ func Run(ctx context.Context, r Runner) error {
 		}
 	}
 
-	pr, err := r.GitHub.PullRequest(ctx, ev.Owner, ev.Repo, ev.PR)
+	pr, err := r.Host.PullRequest(ctx, ev.Owner, ev.Repo, ev.PR)
 	if err != nil {
 		return fmt.Errorf("fetch %s#%d: %w", repo, ev.PR, err)
 	}
@@ -128,12 +153,12 @@ func Run(ctx context.Context, r Runner) error {
 	return nil
 }
 
-func (r Runner) evaluate(ctx context.Context, repo string, pr *github.PullRequest) error {
+func (r Runner) evaluate(ctx context.Context, repo string, pr *host.PullRequest) error {
 	ev := r.Event
 
-	ruleset, err := r.GitHub.FileContent(ctx, ev.Owner, ev.Repo, RulesetPath, pr.BaseRef)
+	ruleset, err := r.loadFile(ctx, ev.Owner, ev.Repo, RulesetPath, legacyRulesetPath, pr.BaseRef)
 	if err != nil {
-		if errors.Is(err, github.ErrNotFound) {
+		if errors.Is(err, host.ErrNotFound) {
 			r.Log.Info("no ruleset on the base branch, nothing to evaluate",
 				"repo", repo, "pr", ev.PR, "path", RulesetPath, "ref", pr.BaseRef)
 			if err := r.sticky(ctx, comment.TopicReview, comment.NoRuleset(RulesetPath, pr.HeadSHA), false); err != nil {
@@ -167,7 +192,7 @@ func (r Runner) evaluate(ctx context.Context, repo string, pr *github.PullReques
 		return r.configBroken(ctx, repo, pr, err)
 	}
 
-	set, units, err := facts.PR(ctx, r.GitHub, ev.Owner, ev.Repo, ev.PR, cfg.Checks, codeowners, modules, teams, arch)
+	set, units, err := facts.PR(ctx, r.Host, ev.Owner, ev.Repo, ev.PR, cfg.Checks, codeowners, modules, teams, arch)
 	if err != nil {
 		return err
 	}
@@ -207,11 +232,11 @@ func (r Runner) evaluate(ctx context.Context, repo string, pr *github.PullReques
 	return r.report(ctx, repo, pr, resp, actions, teams, docWarnings, len(codeUnits))
 }
 
-func (r Runner) plan(ctx context.Context, repo string, pr *github.PullRequest, set facts.Set, codeUnits []cluster.CodeUnit, base []action.Action) error {
+func (r Runner) plan(ctx context.Context, repo string, pr *host.PullRequest, set facts.Set, codeUnits []cluster.CodeUnit, base []action.Action) error {
 	ev := r.Event
 
-	headRuleset, err := r.GitHub.FileContent(ctx, ev.Owner, ev.Repo, RulesetPath, pr.HeadSHA)
-	if errors.Is(err, github.ErrNotFound) {
+	headRuleset, err := r.loadFile(ctx, ev.Owner, ev.Repo, RulesetPath, legacyRulesetPath, pr.HeadSHA)
+	if errors.Is(err, host.ErrNotFound) {
 		if err := r.sticky(ctx, comment.TopicPlan, comment.PlanResolved(pr.HeadSHA), true); err != nil {
 			return fmt.Errorf("resolve stale plan comment for %s#%d: %w", repo, ev.PR, err)
 		}
@@ -250,9 +275,42 @@ func (r Runner) plan(ctx context.Context, repo string, pr *github.PullRequest, s
 	return nil
 }
 
+// loadFile reads path, falling back to legacyPath (with a logged deprecation
+// warning) when path is not found. Returns host.ErrNotFound when neither
+// resolves, so callers can keep testing errors.Is(err, host.ErrNotFound).
+func (r Runner) loadFile(ctx context.Context, owner, repo, path, legacyPath, ref string) ([]byte, error) {
+	data, err := r.Host.FileContent(ctx, owner, repo, path, ref)
+	if err == nil {
+		return data, nil
+	}
+	if !errors.Is(err, host.ErrNotFound) {
+		return nil, err
+	}
+	data, err = r.Host.FileContent(ctx, owner, repo, legacyPath, ref)
+	if err != nil {
+		return nil, err
+	}
+	r.warnLegacyPath(owner, repo, path, legacyPath)
+	return data, nil
+}
+
+// warnLegacyPath logs the legacy-path deprecation warning at most once per
+// legacyPath per Runner (see warnedLegacy) — a repo entirely on the legacy
+// layout would otherwise log it once per config file per run.
+func (r Runner) warnLegacyPath(owner, repo, path, legacyPath string) {
+	if r.warnedLegacy != nil {
+		if r.warnedLegacy[legacyPath] {
+			return
+		}
+		r.warnedLegacy[legacyPath] = true
+	}
+	r.Log.Warn("using legacy talooner config path, move it", "legacy_path", legacyPath, "path", path,
+		"repo", owner+"/"+repo)
+}
+
 func (r Runner) loadConfig(ctx context.Context, owner, repo, ref string) (config.Config, error) {
-	data, err := r.GitHub.FileContent(ctx, owner, repo, ConfigPath, ref)
-	if errors.Is(err, github.ErrNotFound) {
+	data, err := r.loadFile(ctx, owner, repo, ConfigPath, legacyConfigPath, ref)
+	if errors.Is(err, host.ErrNotFound) {
 		r.Log.Info("no config on the base branch, no check patterns",
 			"repo", owner+"/"+repo, "path", ConfigPath, "ref", ref)
 		return config.Config{}, nil
@@ -267,15 +325,21 @@ func (r Runner) loadConfig(ctx context.Context, owner, repo, ref string) (config
 	return cfg, nil
 }
 
-var codeownersPaths = []string{".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"}
-
 func (r Runner) loadCodeowners(ctx context.Context, owner, repo, ref string) ([]byte, error) {
-	for _, p := range codeownersPaths {
-		data, err := r.GitHub.FileContent(ctx, owner, repo, p, ref)
+	data, err := r.Host.FileContent(ctx, owner, repo, CodeownersPath, ref)
+	if err == nil {
+		return data, nil
+	}
+	if !errors.Is(err, host.ErrNotFound) {
+		return nil, fmt.Errorf("load %s from %s/%s@%s: %w", CodeownersPath, owner, repo, ref, err)
+	}
+	for _, p := range legacyCodeownersPaths {
+		data, err := r.Host.FileContent(ctx, owner, repo, p, ref)
 		if err == nil {
+			r.warnLegacyPath(owner, repo, CodeownersPath, p)
 			return data, nil
 		}
-		if !errors.Is(err, github.ErrNotFound) {
+		if !errors.Is(err, host.ErrNotFound) {
 			return nil, fmt.Errorf("load %s from %s/%s@%s: %w", p, owner, repo, ref, err)
 		}
 	}
@@ -283,8 +347,8 @@ func (r Runner) loadCodeowners(ctx context.Context, owner, repo, ref string) ([]
 }
 
 func (r Runner) loadModules(ctx context.Context, owner, repo, ref string) ([]config.Module, error) {
-	data, err := r.GitHub.FileContent(ctx, owner, repo, ModulePath, ref)
-	if errors.Is(err, github.ErrNotFound) {
+	data, err := r.loadFile(ctx, owner, repo, ModulePath, legacyModulePath, ref)
+	if errors.Is(err, host.ErrNotFound) {
 		return nil, nil
 	}
 	if err != nil {
@@ -298,8 +362,8 @@ func (r Runner) loadModules(ctx context.Context, owner, repo, ref string) ([]con
 }
 
 func (r Runner) loadTeams(ctx context.Context, owner, repo, ref string) (config.Teams, error) {
-	data, err := r.GitHub.FileContent(ctx, owner, repo, TeamPath, ref)
-	if errors.Is(err, github.ErrNotFound) {
+	data, err := r.loadFile(ctx, owner, repo, TeamPath, legacyTeamPath, ref)
+	if errors.Is(err, host.ErrNotFound) {
 		return nil, nil
 	}
 	if err != nil {
@@ -313,8 +377,8 @@ func (r Runner) loadTeams(ctx context.Context, owner, repo, ref string) (config.
 }
 
 func (r Runner) loadArchitecture(ctx context.Context, owner, repo, ref string) ([]config.ArchitectureRule, error) {
-	data, err := r.GitHub.FileContent(ctx, owner, repo, ArchitecturePath, ref)
-	if errors.Is(err, github.ErrNotFound) {
+	data, err := r.loadFile(ctx, owner, repo, ArchitecturePath, legacyArchitecturePath, ref)
+	if errors.Is(err, host.ErrNotFound) {
 		return nil, nil
 	}
 	if err != nil {
@@ -345,7 +409,7 @@ func (r Runner) resolveCodeUnits(ctx context.Context, owner, repo, baseRef strin
 		}
 		d, cached := docs[u.DocRef]
 		if !cached {
-			content, err := r.GitHub.FileContent(ctx, owner, repo, u.DocRef, baseRef)
+			content, err := r.Host.FileContent(ctx, owner, repo, u.DocRef, baseRef)
 			d = doc{content: content, err: err}
 			docs[u.DocRef] = d
 			if err != nil {
@@ -379,7 +443,7 @@ func (r Runner) gate(ctx context.Context) (*command.Command, error) {
 		return nil, nil
 	}
 
-	if err := command.Authorize(ctx, r.GitHub, ev.Owner, ev.Repo, ev.Actor); err != nil {
+	if err := command.Authorize(ctx, r.Host, ev.Owner, ev.Repo, ev.Actor); err != nil {
 		if errors.Is(err, command.ErrNotAuthorized) {
 			r.Log.Info("ignoring command from an account without write access",
 				"repo", ev.Owner+"/"+ev.Repo, "pr", ev.PR, "actor", ev.Actor)
@@ -398,7 +462,7 @@ func (r Runner) gate(ctx context.Context) (*command.Command, error) {
 	return cmd, nil
 }
 
-func (r Runner) report(ctx context.Context, repo string, pr *github.PullRequest, resp *taloonerpb.EvaluatePrResponse, actions []action.Action, teams config.Teams, docWarnings []check.Warning, unitCount int) error {
+func (r Runner) report(ctx context.Context, repo string, pr *host.PullRequest, resp *taloonerpb.EvaluatePrResponse, actions []action.Action, teams config.Teams, docWarnings []check.Warning, unitCount int) error {
 	warnings := make([]check.Warning, 0, len(resp.GetWarnings())+len(docWarnings))
 	warnings = append(warnings, docWarnings...)
 	for _, w := range resp.GetWarnings() {
@@ -414,9 +478,9 @@ func (r Runner) report(ctx context.Context, repo string, pr *github.PullRequest,
 		r.Log.Info("action", "repo", repo, "pr", r.Event.PR, "verb", a.Verb, "plan", action.Describe(a))
 	}
 
-	rev := review.New(r.GitHub, r.Event.Owner, r.Event.Repo, r.Event.PR,
+	rev := review.New(r.Host, r.Event.Owner, r.Event.Repo, r.Event.PR,
 		pr.HeadSHA, review.Verdict(actions), r.Log)
-	asg, err := assignment.New(r.GitHub, r.Event.Owner, r.Event.Repo, r.Event.PR, pr, actions, teams, r.Log)
+	asg, err := assignment.New(r.Host, r.Event.Owner, r.Event.Repo, r.Event.PR, pr, actions, teams, r.Log)
 	if err != nil {
 		return fmt.Errorf("cannot carry out the decision for %s#%d: %w", repo, r.Event.PR, err)
 	}
@@ -448,7 +512,7 @@ func (r Runner) report(ctx context.Context, repo string, pr *github.PullRequest,
 
 	cr := check.Decision(actions, warnings, summary, unitCount)
 	cr.HeadSHA = pr.HeadSHA
-	if _, err := r.GitHub.UpsertCheckRun(ctx, r.Event.Owner, r.Event.Repo, cr); err != nil {
+	if _, err := r.Host.UpsertCheckRun(ctx, r.Event.Owner, r.Event.Repo, cr); err != nil {
 		return fmt.Errorf("write the check run for %s#%d: %w", repo, r.Event.PR, err)
 	}
 	r.Log.Info("check run written", "repo", repo, "pr", r.Event.PR,
@@ -456,7 +520,7 @@ func (r Runner) report(ctx context.Context, repo string, pr *github.PullRequest,
 	return nil
 }
 
-func (r Runner) reviewComment(ctx context.Context, repo string, pr *github.PullRequest,
+func (r Runner) reviewComment(ctx context.Context, repo string, pr *host.PullRequest,
 	actions []action.Action, warnings []check.Warning, summary string,
 ) error {
 	body, editOnly := comment.Review(actions, warnings, summary, pr.HeadSHA), false
@@ -472,27 +536,27 @@ func (r Runner) reviewComment(ctx context.Context, repo string, pr *github.PullR
 	return nil
 }
 
-func (r Runner) why(ctx context.Context, repo string, pr *github.PullRequest) error {
+func (r Runner) why(ctx context.Context, repo string, pr *host.PullRequest) error {
 	resp, err := r.Cluster.ExplainPR(ctx, repo, r.Event.PR, pr.HeadSHA)
 	if err != nil {
 		if !errors.Is(err, cluster.ErrAction) {
 			return fmt.Errorf("explain %s#%d: %w", repo, r.Event.PR, err)
 		}
-		if _, cErr := r.GitHub.CreateComment(ctx, r.Event.Owner, r.Event.Repo, r.Event.PR,
+		if _, cErr := r.Host.CreateComment(ctx, r.Event.Owner, r.Event.Repo, r.Event.PR,
 			comment.WhyNotEvaluated(err.Error(), pr.HeadSHA)); cErr != nil {
 			return fmt.Errorf("write why-unavailable comment for %s#%d: %w", repo, r.Event.PR, cErr)
 		}
 		return nil
 	}
 
-	if _, err := r.GitHub.CreateComment(ctx, r.Event.Owner, r.Event.Repo, r.Event.PR,
+	if _, err := r.Host.CreateComment(ctx, r.Event.Owner, r.Event.Repo, r.Event.PR,
 		comment.Why(resp.GetExplain(), pr.HeadSHA)); err != nil {
 		return fmt.Errorf("write why comment for %s#%d: %w", repo, r.Event.PR, err)
 	}
 	return nil
 }
 
-func (r Runner) planReply(ctx context.Context, repo string, pr *github.PullRequest) error {
+func (r Runner) planReply(ctx context.Context, repo string, pr *host.PullRequest) error {
 	ev := r.Event
 
 	cfg, err := r.loadConfig(ctx, ev.Owner, ev.Repo, pr.BaseRef)
@@ -516,9 +580,9 @@ func (r Runner) planReply(ctx context.Context, repo string, pr *github.PullReque
 		return fmt.Errorf("load architecture for %s#%d: %w", repo, ev.PR, err)
 	}
 
-	ruleset, err := r.GitHub.FileContent(ctx, ev.Owner, ev.Repo, RulesetPath, pr.HeadSHA)
-	if errors.Is(err, github.ErrNotFound) {
-		if _, cErr := r.GitHub.CreateComment(ctx, ev.Owner, ev.Repo, ev.PR,
+	ruleset, err := r.loadFile(ctx, ev.Owner, ev.Repo, RulesetPath, legacyRulesetPath, pr.HeadSHA)
+	if errors.Is(err, host.ErrNotFound) {
+		if _, cErr := r.Host.CreateComment(ctx, ev.Owner, ev.Repo, ev.PR,
 			comment.PlanNoRuleset(RulesetPath, pr.HeadSHA)); cErr != nil {
 			return fmt.Errorf("write plan-no-ruleset comment for %s#%d: %w", repo, ev.PR, cErr)
 		}
@@ -528,7 +592,7 @@ func (r Runner) planReply(ctx context.Context, repo string, pr *github.PullReque
 		return fmt.Errorf("load head ruleset for %s#%d: %w", repo, ev.PR, err)
 	}
 
-	set, units, err := facts.PR(ctx, r.GitHub, ev.Owner, ev.Repo, ev.PR, cfg.Checks, codeowners, modules, teams, arch)
+	set, units, err := facts.PR(ctx, r.Host, ev.Owner, ev.Repo, ev.PR, cfg.Checks, codeowners, modules, teams, arch)
 	if err != nil {
 		return err
 	}
@@ -550,7 +614,7 @@ func (r Runner) planReply(ctx context.Context, repo string, pr *github.PullReque
 		if !errors.Is(err, cluster.ErrAction) {
 			return fmt.Errorf("evaluate plan for %s#%d: %w", repo, ev.PR, err)
 		}
-		if _, cErr := r.GitHub.CreateComment(ctx, ev.Owner, ev.Repo, ev.PR,
+		if _, cErr := r.Host.CreateComment(ctx, ev.Owner, ev.Repo, ev.PR,
 			comment.PlanBroken(err.Error(), pr.HeadSHA)); cErr != nil {
 			return fmt.Errorf("write plan-broken comment for %s#%d: %w", repo, ev.PR, cErr)
 		}
@@ -562,7 +626,7 @@ func (r Runner) planReply(ctx context.Context, repo string, pr *github.PullReque
 		return fmt.Errorf("decode the plan for %s#%d: %w", repo, ev.PR, err)
 	}
 
-	if _, err := r.GitHub.CreateComment(ctx, ev.Owner, ev.Repo, ev.PR,
+	if _, err := r.Host.CreateComment(ctx, ev.Owner, ev.Repo, ev.PR,
 		comment.PlanNow(actions, pr.HeadSHA)); err != nil {
 		return fmt.Errorf("write plan comment for %s#%d: %w", repo, ev.PR, err)
 	}
@@ -571,7 +635,7 @@ func (r Runner) planReply(ctx context.Context, repo string, pr *github.PullReque
 
 func (r Runner) sticky(ctx context.Context, topic, body string, editOnly bool) error {
 	ev := r.Event
-	id, err := r.GitHub.UpsertComment(ctx, ev.Owner, ev.Repo, ev.PR, github.StickyComment{
+	id, err := r.Host.UpsertComment(ctx, ev.Owner, ev.Repo, ev.PR, host.StickyComment{
 		Marker:   comment.Marker(topic),
 		Body:     body,
 		EditOnly: editOnly,
@@ -587,7 +651,7 @@ func (r Runner) sticky(ctx context.Context, topic, body string, editOnly bool) e
 	return nil
 }
 
-func (r Runner) rulesetBroken(ctx context.Context, repo string, pr *github.PullRequest, ruleset string, cause error) error {
+func (r Runner) rulesetBroken(ctx context.Context, repo string, pr *host.PullRequest, ruleset string, cause error) error {
 	var diags []check.Diagnostic
 	resp, err := r.Cluster.ValidateRuleset(ctx, ruleset)
 	if err != nil {
@@ -608,7 +672,7 @@ func (r Runner) rulesetBroken(ctx context.Context, repo string, pr *github.PullR
 
 	cr := check.Broken(cause.Error(), diags)
 	cr.HeadSHA = pr.HeadSHA
-	if _, err := r.GitHub.UpsertCheckRun(ctx, r.Event.Owner, r.Event.Repo, cr); err != nil {
+	if _, err := r.Host.UpsertCheckRun(ctx, r.Event.Owner, r.Event.Repo, cr); err != nil {
 		r.Log.Error("cannot write the neutral check run", "repo", repo, "pr", r.Event.PR, "err", err)
 	}
 
@@ -618,14 +682,14 @@ func (r Runner) rulesetBroken(ctx context.Context, repo string, pr *github.PullR
 	return reported{cause}
 }
 
-func (r Runner) configBroken(ctx context.Context, repo string, pr *github.PullRequest, cause error) error {
+func (r Runner) configBroken(ctx context.Context, repo string, pr *host.PullRequest, cause error) error {
 	if err := r.sticky(ctx, comment.TopicReview, comment.Broken(cause.Error(), pr.HeadSHA), false); err != nil {
 		r.Log.Error("cannot write the review comment", "repo", repo, "pr", r.Event.PR, "err", err)
 	}
 	return cause
 }
 
-func (r Runner) failOpen(ctx context.Context, repo string, pr *github.PullRequest, cause error) error {
+func (r Runner) failOpen(ctx context.Context, repo string, pr *host.PullRequest, cause error) error {
 	var already reported
 	if errors.As(cause, &already) {
 		return already.err
@@ -633,7 +697,7 @@ func (r Runner) failOpen(ctx context.Context, repo string, pr *github.PullReques
 
 	cr := check.Broken(cause.Error(), nil)
 	cr.HeadSHA = pr.HeadSHA
-	if _, err := r.GitHub.UpsertCheckRun(ctx, r.Event.Owner, r.Event.Repo, cr); err != nil {
+	if _, err := r.Host.UpsertCheckRun(ctx, r.Event.Owner, r.Event.Repo, cr); err != nil {
 		r.Log.Error("cannot write the neutral check run", "repo", repo, "pr", r.Event.PR, "err", err)
 	}
 	return cause
@@ -671,7 +735,7 @@ func Main(ctx context.Context, log *slog.Logger) int {
 
 	if err := Run(ctx, Runner{
 		Event:   ev,
-		GitHub:  gh,
+		Host:    gh,
 		Cluster: cl,
 		Log:     log,
 	}); err != nil {

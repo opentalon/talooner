@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/opentalon/talooner/internal/host"
 )
 
 // checkRunServer is the two endpoints a check run write touches: the list at a
@@ -90,11 +92,11 @@ func decodePayload(t *testing.T, r *http.Request) checkRunPayload {
 	return p
 }
 
-func neutralRun() CheckRun {
-	return CheckRun{
+func neutralRun() host.CheckRun {
+	return host.CheckRun{
 		Name:       "talooner",
 		HeadSHA:    "abc123",
-		Conclusion: ConclusionNeutral,
+		Conclusion: host.ConclusionNeutral,
 		Title:      "No rules fired",
 		Summary:    "No rule matched this pull request.",
 	}
@@ -116,7 +118,7 @@ func TestUpsertCheckRunCreatesWhenThereIsNone(t *testing.T) {
 	if got.Name != "talooner" || got.HeadSHA != "abc123" {
 		t.Errorf("identity = %s@%s", got.Name, got.HeadSHA)
 	}
-	if got.Status != "completed" || got.Conclusion != ConclusionNeutral {
+	if got.Status != "completed" || got.Conclusion != host.ConclusionNeutral {
 		t.Errorf("status = %q, conclusion = %q", got.Status, got.Conclusion)
 	}
 	if got.CompletedAt == "" {
@@ -133,7 +135,7 @@ func TestUpsertCheckRunUpdatesInPlace(t *testing.T) {
 	}{id: 4242, name: "talooner"}}
 
 	cr := neutralRun()
-	cr.Conclusion = ConclusionFailure
+	cr.Conclusion = host.ConclusionFailure
 	cr.Title = "Changes requested"
 	id, err := s.client(t).UpsertCheckRun(context.Background(), "opentalon", "talooner", cr)
 	if err != nil {
@@ -152,7 +154,7 @@ func TestUpsertCheckRunUpdatesInPlace(t *testing.T) {
 	if s.patches[0].HeadSHA != "" || s.patches[0].Name != "" {
 		t.Errorf("update re-sent the identity: %+v", s.patches[0])
 	}
-	if s.patches[0].Conclusion != ConclusionFailure {
+	if s.patches[0].Conclusion != host.ConclusionFailure {
 		t.Errorf("conclusion = %q, want failure", s.patches[0].Conclusion)
 	}
 }
@@ -176,11 +178,11 @@ func TestUpsertCheckRunBatchesAnnotations(t *testing.T) {
 	s := &checkRunServer{}
 	cr := neutralRun()
 	for i := range maxAnnotations + 2 {
-		cr.Annotations = append(cr.Annotations, Annotation{
+		cr.Annotations = append(cr.Annotations, host.Annotation{
 			Path:      ".github/talooner/rules.tln",
 			StartLine: i + 1,
 			EndLine:   i + 1,
-			Level:     LevelFailure,
+			Level:     host.LevelFailure,
 			Message:   "unexpected token",
 		})
 	}
@@ -201,7 +203,7 @@ func TestUpsertCheckRunBatchesAnnotations(t *testing.T) {
 		t.Errorf("follow-up patched %s, want the check run just created", s.patchIDs[0])
 	}
 	first := s.posts[0].Output.Annotations[0]
-	if first.AnnotationLevel != LevelFailure || first.StartLine != 1 || first.Path == "" {
+	if first.AnnotationLevel != host.LevelFailure || first.StartLine != 1 || first.Path == "" {
 		t.Errorf("annotation payload = %+v", first)
 	}
 }
@@ -235,27 +237,27 @@ func TestUpsertCheckRunRejectsUnwritableRuns(t *testing.T) {
 	valid := neutralRun()
 	tests := []struct {
 		name string
-		cr   func(CheckRun) CheckRun
+		cr   func(host.CheckRun) host.CheckRun
 	}{
-		{"no name", func(cr CheckRun) CheckRun { cr.Name = ""; return cr }},
-		{"no head sha", func(cr CheckRun) CheckRun { cr.HeadSHA = " "; return cr }},
-		{"no conclusion", func(cr CheckRun) CheckRun { cr.Conclusion = ""; return cr }},
-		{"a conclusion GitHub does not know", func(cr CheckRun) CheckRun { cr.Conclusion = "broken"; return cr }},
-		{"no summary", func(cr CheckRun) CheckRun { cr.Summary = ""; return cr }},
-		{"an annotation with no path", func(cr CheckRun) CheckRun {
-			cr.Annotations = []Annotation{{StartLine: 1, EndLine: 1, Level: LevelFailure, Message: "x"}}
+		{"no name", func(cr host.CheckRun) host.CheckRun { cr.Name = ""; return cr }},
+		{"no head sha", func(cr host.CheckRun) host.CheckRun { cr.HeadSHA = " "; return cr }},
+		{"no conclusion", func(cr host.CheckRun) host.CheckRun { cr.Conclusion = ""; return cr }},
+		{"a conclusion GitHub does not know", func(cr host.CheckRun) host.CheckRun { cr.Conclusion = "broken"; return cr }},
+		{"no summary", func(cr host.CheckRun) host.CheckRun { cr.Summary = ""; return cr }},
+		{"an annotation with no path", func(cr host.CheckRun) host.CheckRun {
+			cr.Annotations = []host.Annotation{{StartLine: 1, EndLine: 1, Level: host.LevelFailure, Message: "x"}}
 			return cr
 		}},
-		{"an annotation at line 0", func(cr CheckRun) CheckRun {
-			cr.Annotations = []Annotation{{Path: "a.tln", Level: LevelWarning, Message: "x"}}
+		{"an annotation at line 0", func(cr host.CheckRun) host.CheckRun {
+			cr.Annotations = []host.Annotation{{Path: "a.tln", Level: host.LevelWarning, Message: "x"}}
 			return cr
 		}},
-		{"an annotation ending before it starts", func(cr CheckRun) CheckRun {
-			cr.Annotations = []Annotation{{Path: "a.tln", StartLine: 9, EndLine: 2, Level: LevelWarning, Message: "x"}}
+		{"an annotation ending before it starts", func(cr host.CheckRun) host.CheckRun {
+			cr.Annotations = []host.Annotation{{Path: "a.tln", StartLine: 9, EndLine: 2, Level: host.LevelWarning, Message: "x"}}
 			return cr
 		}},
-		{"an annotation with no message", func(cr CheckRun) CheckRun {
-			cr.Annotations = []Annotation{{Path: "a.tln", StartLine: 1, EndLine: 1, Level: LevelWarning}}
+		{"an annotation with no message", func(cr host.CheckRun) host.CheckRun {
+			cr.Annotations = []host.Annotation{{Path: "a.tln", StartLine: 1, EndLine: 1, Level: host.LevelWarning}}
 			return cr
 		}},
 	}

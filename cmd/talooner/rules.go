@@ -15,7 +15,7 @@ import (
 
 	"github.com/opentalon/talooner/internal/cluster"
 	"github.com/opentalon/talooner/internal/credentials"
-	"github.com/opentalon/talooner/internal/github"
+	"github.com/opentalon/talooner/internal/host/github"
 	"github.com/opentalon/talooner/internal/onboard"
 	talrun "github.com/opentalon/talooner/internal/run"
 )
@@ -45,7 +45,7 @@ func runRulesValidate(ctx context.Context, args []string, stdout, stderr io.Writ
 		return 2
 	}
 	if fs.NArg() != 1 {
-		printf(stderr, "talooner rules validate: usage: talooner rules validate <path-to-.github/talooner>\n")
+		printf(stderr, "talooner rules validate: usage: talooner rules validate <path-to-.talooner>\n")
 		return 2
 	}
 
@@ -109,7 +109,7 @@ func runRulesTest(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		return 2
 	}
 	if fs.NArg() != 1 {
-		printf(stderr, "talooner rules test: usage: talooner rules test <path-to-.github/talooner>\n")
+		printf(stderr, "talooner rules test: usage: talooner rules test <path-to-.talooner>\n")
 		return 2
 	}
 
@@ -237,7 +237,7 @@ func runRulesPlan(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		return 1
 	}
 
-	r := talrun.Runner{GitHub: gh, Cluster: client, Log: log}
+	r := talrun.Runner{Host: gh, Cluster: client, Log: log}
 	if err := r.Plan(ctx, owner, name, *pr, stdout); err != nil {
 		printf(stderr, "talooner rules plan: %v\n", err)
 		return 1

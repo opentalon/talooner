@@ -8,7 +8,7 @@ import (
 
 	"github.com/opentalon/talooner/internal/action"
 	"github.com/opentalon/talooner/internal/comment"
-	"github.com/opentalon/talooner/internal/github"
+	"github.com/opentalon/talooner/internal/host"
 )
 
 func Marker() string { return comment.Marker(comment.TopicVerdict) }
@@ -18,23 +18,19 @@ func Verdict(actions []action.Action) string {
 	for _, a := range actions {
 		switch a.Verb {
 		case action.VerbBlock:
-			return github.ReviewRequestChanges
+			return host.ReviewRequestChanges
 		case action.VerbApprove:
 			approved = true
 		}
 	}
 	if approved {
-		return github.ReviewApprove
+		return host.ReviewApprove
 	}
 	return ""
 }
 
-type Submitter interface {
-	SyncReview(ctx context.Context, owner, repo string, number int, rv github.Review) (int64, error)
-}
-
 type Writer struct {
-	gh      Submitter
+	gh      host.Submitter
 	owner   string
 	repo    string
 	number  int
@@ -44,7 +40,7 @@ type Writer struct {
 	done    bool
 }
 
-func New(gh Submitter, owner, repo string, number int, headSHA, event string, log *slog.Logger) *Writer {
+func New(gh host.Submitter, owner, repo string, number int, headSHA, event string, log *slog.Logger) *Writer {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
@@ -64,7 +60,7 @@ func (w *Writer) Sync(ctx context.Context) error {
 	}
 	w.done = true
 
-	id, err := w.gh.SyncReview(ctx, w.owner, w.repo, w.number, github.Review{
+	id, err := w.gh.SyncReview(ctx, w.owner, w.repo, w.number, host.Review{
 		Marker:         Marker(),
 		Event:          w.event,
 		Body:           Body(w.event, w.headSHA),
@@ -82,14 +78,14 @@ func (w *Writer) Sync(ctx context.Context) error {
 func Body(event, sha string) string {
 	var b strings.Builder
 	switch event {
-	case github.ReviewApprove:
+	case host.ReviewApprove:
 		b.WriteString("### Talooner approves\n\n")
-		b.WriteString("The rules in `.github/talooner/rules.tln` all pass on this pull request.\n\n")
+		b.WriteString("The rules in this repository's Talooner ruleset all pass on this pull request.\n\n")
 		b.WriteString("This approval is advisory. It is a pre-pass before human review, not a substitute " +
 			"for one, and it does not satisfy a branch protection rule that requires approvals from people.\n")
-	case github.ReviewRequestChanges:
+	case host.ReviewRequestChanges:
 		b.WriteString("### Talooner requests changes\n\n")
-		b.WriteString("A rule in `.github/talooner/rules.tln` blocked this pull request. " +
+		b.WriteString("A rule in this repository's Talooner ruleset blocked this pull request. " +
 			"The findings are in Talooner's review comment on this pull request, and in the `talooner` check run.\n\n")
 		b.WriteString("Whether this blocks the merge is the repository's branch protection to decide; " +
 			"Talooner has no merge rights either way.\n")

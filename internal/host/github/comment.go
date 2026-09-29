@@ -8,19 +8,15 @@ import (
 	"net/http"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/opentalon/talooner/internal/host"
 )
 
 const maxCommentBytes = 65536
 
 const truncationNotice = "\n\n… truncated: this comment hit GitHub's size limit. The check run carries the full verdict.\n"
 
-type StickyComment struct {
-	Marker   string
-	Body     string
-	EditOnly bool
-}
-
-func (s StickyComment) validate() error {
+func validateStickyComment(s host.StickyComment) error {
 	if strings.TrimSpace(s.Marker) == "" {
 		return errors.New("sticky comment needs a marker")
 	}
@@ -36,7 +32,7 @@ func (s StickyComment) validate() error {
 	return nil
 }
 
-func (s StickyComment) text() string {
+func stickyCommentText(s host.StickyComment) string {
 	return truncate(s.Marker + "\n" + s.Body)
 }
 
@@ -57,11 +53,11 @@ type issueComment struct {
 	Body string `json:"body"`
 }
 
-func (c *Client) UpsertComment(ctx context.Context, owner, repo string, number int, s StickyComment) (int64, error) {
+func (c *Client) UpsertComment(ctx context.Context, owner, repo string, number int, s host.StickyComment) (int64, error) {
 	if number <= 0 {
 		return 0, fmt.Errorf("pull request number must be positive, got %d", number)
 	}
-	if err := s.validate(); err != nil {
+	if err := validateStickyComment(s); err != nil {
 		return 0, err
 	}
 
@@ -73,7 +69,7 @@ func (c *Client) UpsertComment(ctx context.Context, owner, repo string, number i
 		return 0, nil
 	}
 
-	raw, err := json.Marshal(issueComment{Body: s.text()})
+	raw, err := json.Marshal(issueComment{Body: stickyCommentText(s)})
 	if err != nil {
 		return 0, fmt.Errorf("encode comment %s on %s/%s#%d: %w", s.Marker, owner, repo, number, err)
 	}
@@ -83,7 +79,7 @@ func (c *Client) UpsertComment(ctx context.Context, owner, repo string, number i
 		if err == nil {
 			return written, nil
 		}
-		if !errors.Is(err, ErrNotFound) || s.EditOnly {
+		if !errors.Is(err, host.ErrNotFound) || s.EditOnly {
 			return 0, err
 		}
 		c.log.Info("sticky comment disappeared while being edited, posting a new one",
